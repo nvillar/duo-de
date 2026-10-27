@@ -1,0 +1,59 @@
+From 70a75e8ff47802c2e8da9df6673696c13522d0ea Mon Sep 17 00:00:00 2001
+From: Michael Kostersitz <mkostersitz@mac.com>
+Date: Tue, 27 Oct 2026 19:42:31 +0000
+Subject: [PATCH] Duo: the keyboard takes the width of the panel it types into
+
+The IME container covers the whole display, so the keyboard of an app on one panel was laid out 2754 px wide: Gboard chose its wide split layout and the keys ran over the hinge and the other panel. Give the IME container the bounds of the IME layering target task, so a panel app gets a panel wide keyboard and a spanned app the display wide one.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+Change-Id: Idaa8d4f124ee6eeddab9738a6b6ede4b05e8e6f4
+---
+ .../com/android/server/wm/DisplayContent.java |  1 +
+ .../wm/DuoDisplayAreaPolicyProvider.java      | 19 +++++++++++++++++++
+ 2 files changed, 20 insertions(+)
+
+diff --git a/services/core/java/com/android/server/wm/DisplayContent.java b/services/core/java/com/android/server/wm/DisplayContent.java
+index 27427724f0c3..799482da8222 100644
+--- a/services/core/java/com/android/server/wm/DisplayContent.java
++++ b/services/core/java/com/android/server/wm/DisplayContent.java
+@@ -4414,6 +4414,7 @@ class DisplayContent extends RootDisplayArea implements WindowManagerPolicy.Disp
+         ProtoLog.i(WM_DEBUG_IME, "setImeLayeringTarget %s", target);
+         boolean forceUpdateImeParent = target != mImeLayeringTarget;
+         mImeLayeringTarget = target;
++        DuoDisplayAreaPolicyProvider.updateImeBounds(this, mImeWindowsContainer, target);
+ 
+         if (target != null && target.isImeOverlayLayeringTarget()) {
+             mWmService.dispatchImeOverlayLayeringTargetVisibilityChanged(target.mClient.asBinder(),
+diff --git a/services/core/java/com/android/server/wm/DuoDisplayAreaPolicyProvider.java b/services/core/java/com/android/server/wm/DuoDisplayAreaPolicyProvider.java
+index 67acf34bcf17..5f78e6d2e45c 100644
+--- a/services/core/java/com/android/server/wm/DuoDisplayAreaPolicyProvider.java
++++ b/services/core/java/com/android/server/wm/DuoDisplayAreaPolicyProvider.java
+@@ -252,6 +252,25 @@ public class DuoDisplayAreaPolicyProvider implements DisplayAreaPolicy.Provider
+         }
+     }
+ 
++    /**
++     * Keeps the input method window on the screen of the app it types into. The IME container covers the whole display,
++     * so the keyboard of an app on one panel was laid out 2754 px wide (Gboard picks its wide split layout, the keys run
++     * over the hinge and over the other panel). The IME container takes the bounds of the layering target's task: a
++     * panel task gives a panel wide keyboard, a spanned task (or none) the display wide one.
++     */
++    static void updateImeBounds(DisplayContent display, WindowContainer imeContainer, @Nullable WindowState target) {
++        if (!sActive || imeContainer == null || !display.isDefaultDisplay) return;
++        final Task task = target != null ? target.getTask() : null;
++        final Rect want = new Rect();
++        if (task != null && !task.getBounds().isEmpty() && !task.getBounds().equals(display.getBounds())) {
++            want.set(task.getBounds());
++        }
++        if (!want.equals(imeContainer.getRequestedOverrideBounds())) {
++            Slog.i(TAG, "IME bounds " + want + " for " + target);
++            imeContainer.setBounds(want);
++        }
++    }
++
+     private static HierarchyBuilder panel(WindowManagerService wmService, DuoPanelGeometry.Spec spec,
+             int index, int groupFeature, int tasksFeature) {
+         final DisplayAreaGroup group = new PanelGroup(wmService, "Panel" + index, groupFeature, spec, index);
+-- 
+2.43.0
+

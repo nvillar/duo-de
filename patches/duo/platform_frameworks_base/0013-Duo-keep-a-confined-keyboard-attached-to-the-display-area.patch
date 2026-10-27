@@ -1,0 +1,50 @@
+From 6e4d9d690fa9817c34cc08c7c1dd779f28dd2a7e Mon Sep 17 00:00:00 2001
+From: Michael Kostersitz <mkostersitz@mac.com>
+Date: Tue, 27 Oct 2026 21:50:12 +0000
+Subject: [PATCH] Duo: keep a confined keyboard attached to the display area,
+ not to the app
+
+An app that fills its panel task area matches its display area bounds, so the IME surface was attached to the app surface. The confined IME container carries the panel offset, which then applied twice and drew the keyboard outside the right panel. Do not attach the IME to the app while the container is confined.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+Change-Id: I89672feb893bcf46788c6945a040ba434e93bd37
+---
+ .../core/java/com/android/server/wm/DisplayContent.java  | 1 +
+ .../android/server/wm/DuoDisplayAreaPolicyProvider.java  | 9 +++++++++
+ 2 files changed, 10 insertions(+)
+
+diff --git a/services/core/java/com/android/server/wm/DisplayContent.java b/services/core/java/com/android/server/wm/DisplayContent.java
+index 799482da8222..01bc3db87117 100644
+--- a/services/core/java/com/android/server/wm/DisplayContent.java
++++ b/services/core/java/com/android/server/wm/DisplayContent.java
+@@ -4281,6 +4281,7 @@ class DisplayContent extends RootDisplayArea implements WindowManagerPolicy.Disp
+         final boolean allowAttachToApp = (mMagnificationSpec == null);
+ 
+         return allowAttachToApp && isImeControlledByApp()
++                && !DuoDisplayAreaPolicyProvider.isImeConfined(mImeWindowsContainer)
+                 && mImeLayeringTarget != null
+                 && mImeLayeringTarget.mActivityRecord != null
+                 && mImeLayeringTarget.getWindowingMode() == WINDOWING_MODE_FULLSCREEN
+diff --git a/services/core/java/com/android/server/wm/DuoDisplayAreaPolicyProvider.java b/services/core/java/com/android/server/wm/DuoDisplayAreaPolicyProvider.java
+index 5f78e6d2e45c..323e4d03f9fe 100644
+--- a/services/core/java/com/android/server/wm/DuoDisplayAreaPolicyProvider.java
++++ b/services/core/java/com/android/server/wm/DuoDisplayAreaPolicyProvider.java
+@@ -271,6 +271,15 @@ public class DuoDisplayAreaPolicyProvider implements DisplayAreaPolicy.Provider
+         }
+     }
+ 
++    /**
++     * True while the IME container is confined to a panel (see {@link #updateImeBounds}). The keyboard must then stay
++     * attached to the display area: attached to the app's surface it would get the panel offset twice and be drawn
++     * outside the right panel.
++     */
++    static boolean isImeConfined(WindowContainer imeContainer) {
++        return sActive && imeContainer != null && !imeContainer.getRequestedOverrideBounds().isEmpty();
++    }
++
+     private static HierarchyBuilder panel(WindowManagerService wmService, DuoPanelGeometry.Spec spec,
+             int index, int groupFeature, int tasksFeature) {
+         final DisplayAreaGroup group = new PanelGroup(wmService, "Panel" + index, groupFeature, spec, index);
+-- 
+2.43.0
+
