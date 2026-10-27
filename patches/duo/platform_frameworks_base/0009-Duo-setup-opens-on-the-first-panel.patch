@@ -1,0 +1,54 @@
+From afc3146fc9f2558f276c69bd1d4885105ef87e2c Mon Sep 17 00:00:00 2001
+From: Michael Kostersitz <mkostersitz@mac.com>
+Date: Tue, 27 Oct 2026 17:45:20 +0000
+Subject: [PATCH 2/3] Duo: setup opens on the first panel
+
+While the user setup is not complete there is no launcher icon to route by, so the setup wizard was spanned over both screens and laid its content out around the hinge (QR code split by the hinge, on screen keyboard floating in the middle). Open every standard task on the first panel until setup is complete, like the stock Duo.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+Change-Id: I71501de5c31b78db3dc6e07012a45c249f372a71
+---
+ .../server/wm/DuoDisplayAreaPolicyProvider.java      | 12 +++++++++---
+ 1 file changed, 9 insertions(+), 3 deletions(-)
+
+diff --git a/services/core/java/com/android/server/wm/DuoDisplayAreaPolicyProvider.java b/services/core/java/com/android/server/wm/DuoDisplayAreaPolicyProvider.java
+index 6ef38240524f..7ba8f8812467 100644
+--- a/services/core/java/com/android/server/wm/DuoDisplayAreaPolicyProvider.java
++++ b/services/core/java/com/android/server/wm/DuoDisplayAreaPolicyProvider.java
+@@ -152,7 +152,8 @@ public class DuoDisplayAreaPolicyProvider implements DisplayAreaPolicy.Provider
+      * tapped icon as the intent's source bounds; the panel containing it gets the new task, so an icon on the left
+      * opens its app on the left screen and one on the right on the right, whichever launcher is home (no launcher
+      * specific code). Only for a new LAUNCHER task started from the home activity while both panels are side by side;
+-     * anything else keeps the platform choice (the default, spanned area).
++     * anything else keeps the platform choice (the default, spanned area), except that every standard task opens on
++     * the first panel until the user has finished the setup wizard.
+      */
+     @Nullable
+     static TaskDisplayArea panelForLaunch(DisplayContent dc, @Nullable ActivityRecord source,
+@@ -161,9 +162,11 @@ public class DuoDisplayAreaPolicyProvider implements DisplayAreaPolicy.Provider
+         // An app that already has a task is moved to / kept on the tapped panel; without this the platform falls back
+         // to the launcher's task area and pulls the task out of its panel into the spanned area.
+         if (existingTask != null && !existingTask.isActivityTypeStandard()) return null;
+-        if (source == null || !source.isActivityTypeHome()) return null;
++        final boolean setup = record.isActivityTypeStandard()
++                && !dc.mWmService.mPolicy.isUserSetupComplete();
++        if (!setup && (source == null || !source.isActivityTypeHome())) return null;
+         final Rect sb = record.intent.getSourceBounds();
+-        if (sb == null || !record.intent.hasCategory(Intent.CATEGORY_LAUNCHER)) return null;
++        if (!setup && (sb == null || !record.intent.hasCategory(Intent.CATEGORY_LAUNCHER))) return null;
+         final TaskDisplayArea first = dc.getItemFromTaskDisplayAreas(
+                 tda -> tda.mFeatureId == FEATURE_PANEL_0_TASKS ? tda : null);
+         final TaskDisplayArea second = dc.getItemFromTaskDisplayAreas(
+@@ -172,6 +175,9 @@ public class DuoDisplayAreaPolicyProvider implements DisplayAreaPolicy.Provider
+         final Rect b0 = first.getBounds();
+         final Rect b1 = second.getBounds();
+         if (b0.equals(b1) || b0.isEmpty() || b1.isEmpty()) return null;   // single panel posture or unknown size
++        // Setup has no launcher icon to tap: it opens on the first panel, as on the stock Duo. Spanned over both screens
++        // the setup wizard centres its layout on the hinge (QR code split, on screen keyboard floating in the middle).
++        if (setup) return first;
+         final int x = sb.centerX();
+         final int y = sb.centerY();
+         final boolean in0 = b0.contains(x, y);
+-- 
+2.43.0
+

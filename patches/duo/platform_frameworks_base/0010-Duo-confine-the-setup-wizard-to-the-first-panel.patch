@@ -1,0 +1,51 @@
+From b8a323052c5a17c2d419a6abebecc0e03d5c20c5 Mon Sep 17 00:00:00 2001
+From: Michael Kostersitz <mkostersitz@mac.com>
+Date: Tue, 27 Oct 2026 18:25:46 +0000
+Subject: [PATCH 3/3] Duo: confine the setup wizard to the first panel
+
+The setup wizard runs as the home task in the spanned home area, so the launch routing never sees it and it covers both screens. Until setup is complete give the home area the bounds of the first panel.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+Change-Id: Id4ac6445462146f497cc38d3cde88431d0e435e0
+---
+ .../server/wm/DuoDisplayAreaPolicyProvider.java | 17 +++++++++++++++++
+ 1 file changed, 17 insertions(+)
+
+diff --git a/services/core/java/com/android/server/wm/DuoDisplayAreaPolicyProvider.java b/services/core/java/com/android/server/wm/DuoDisplayAreaPolicyProvider.java
+index 7ba8f8812467..67acf34bcf17 100644
+--- a/services/core/java/com/android/server/wm/DuoDisplayAreaPolicyProvider.java
++++ b/services/core/java/com/android/server/wm/DuoDisplayAreaPolicyProvider.java
+@@ -217,6 +217,7 @@ public class DuoDisplayAreaPolicyProvider implements DisplayAreaPolicy.Provider
+         final WindowContainer group0 = first.getRootDisplayArea();
+         final WindowContainer group1 = second.getRootDisplayArea();
+         if (group0 == null || group1 == null || group0.getParent() != parent || group1.getParent() != parent) return;
++        confineSetupToFirstPanel(display, home, group0);
+ 
+         final boolean[] needsTop = {false};
+         home.forAllRootTasks((java.util.function.Predicate<Task>) t -> {
+@@ -235,6 +236,22 @@ public class DuoDisplayAreaPolicyProvider implements DisplayAreaPolicy.Provider
+         }
+     }
+ 
++    /**
++     * The setup wizard runs as the home task (home type, in the spanned home area), so launch routing does not reach it
++     * and it covers both screens: the wizard centres its layout on the hinge (QR code split, on screen keyboard floating
++     * in the middle). Until the user has finished setup the home area takes the bounds of the first panel, like on the
++     * stock Duo; afterwards it is released and home spans the display again.
++     */
++    private static void confineSetupToFirstPanel(DisplayContent display, TaskDisplayArea home, WindowContainer group0) {
++        final boolean setup = !display.mWmService.mPolicy.isUserSetupComplete();
++        final Rect panel = group0.getBounds();
++        final Rect want = setup && !panel.isEmpty() ? new Rect(panel) : new Rect();
++        if (!want.equals(home.getRequestedOverrideBounds())) {
++            Slog.i(TAG, "Setup " + (setup ? "confined to the first panel " : "finished, home spans again ") + want);
++            home.setBounds(want);
++        }
++    }
++
+     private static HierarchyBuilder panel(WindowManagerService wmService, DuoPanelGeometry.Spec spec,
+             int index, int groupFeature, int tasksFeature) {
+         final DisplayAreaGroup group = new PanelGroup(wmService, "Panel" + index, groupFeature, spec, index);
+-- 
+2.43.0
+
