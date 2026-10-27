@@ -1,0 +1,55 @@
+From 2d1a75b201969964d144a3180fe18db7e3c59c80 Mon Sep 17 00:00:00 2001
+From: Michael Kostersitz <mkostersitz@mac.com>
+Date: Tue, 27 Oct 2026 20:34:12 +0000
+Subject: [PATCH] Duo: route a launcher icon to its panel even when the
+ launcher passes its display id
+
+Launcher3 always passes its display id in the activity options. That step selected the default task display area before the panel routing ran, so apps started from Launcher3 opened spanned over both screens instead of on the tapped panel (Microsoft Launcher passes no display id and worked). Run the panel routing first, for launches on the default display.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+Change-Id: I8dcb58fda9294b3aa2cfeca559052a90407e1350
+---
+ .../android/server/wm/LaunchParamsUtil.java   | 20 ++++++++++---------
+ 1 file changed, 11 insertions(+), 9 deletions(-)
+
+diff --git a/services/core/java/com/android/server/wm/LaunchParamsUtil.java b/services/core/java/com/android/server/wm/LaunchParamsUtil.java
+index 7055fcc381de..22d81f422a8e 100644
+--- a/services/core/java/com/android/server/wm/LaunchParamsUtil.java
++++ b/services/core/java/com/android/server/wm/LaunchParamsUtil.java
+@@ -312,6 +312,17 @@ class LaunchParamsUtil {
+             }
+         }
+ 
++        // Duo two panel policy: a launcher icon opens its app on the panel it was tapped on. Before the display id
++        // option: Launcher3 always passes its display id, which only names the display and must not stop the routing.
++        if (taskDisplayArea == null && (options == null || options.getLaunchDisplayId() == INVALID_DISPLAY
++                || options.getLaunchDisplayId() == DEFAULT_DISPLAY)) {
++            taskDisplayArea = DuoDisplayAreaPolicyProvider.panelForLaunch(
++                    supervisor.mRootWindowContainer.getDefaultDisplay(), source, activityRecord, task);
++            if (taskDisplayArea != null) {
++                logger.accept("display-area-from-source-bounds=" + taskDisplayArea);
++            }
++        }
++
+         // If task display area is not specified in options - try display id
+         if (taskDisplayArea == null) {
+             final int optionLaunchId =
+@@ -326,15 +337,6 @@ class LaunchParamsUtil {
+             }
+         }
+ 
+-        // Duo two panel policy: a launcher icon opens its app on the panel it was tapped on.
+-        if (taskDisplayArea == null) {
+-            taskDisplayArea = DuoDisplayAreaPolicyProvider.panelForLaunch(
+-                    supervisor.mRootWindowContainer.getDefaultDisplay(), source, activityRecord, task);
+-            if (taskDisplayArea != null) {
+-                logger.accept("display-area-from-source-bounds=" + taskDisplayArea);
+-            }
+-        }
+-
+         // If the source activity is a no-display activity, pass on the launch display area token
+         // from source activity as currently preferred.
+         if (taskDisplayArea == null && source != null && source.isNoDisplay()) {
+-- 
+2.43.0
+
