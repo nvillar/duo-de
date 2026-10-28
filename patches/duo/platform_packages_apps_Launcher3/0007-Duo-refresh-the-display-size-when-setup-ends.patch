@@ -1,0 +1,64 @@
+From f364b0e7e2ccd71ebbdae0d55e8a2fcb117898cf Mon Sep 17 00:00:00 2001
+From: Michael Kostersitz <mkostersitz@mac.com>
+Date: Wed, 28 Oct 2026 17:28:37 +0000
+Subject: [PATCH] Duo: refresh the display size when setup ends
+
+Until the user has finished setup the home area takes the bounds of the first panel, so the Launcher3 window context (and with it the Quickstep touch regions) read a 1344 px wide display. The context was not always told when home spans the display again, and a change of the current size alone was not treated as a change, so the swipe up gestures kept working on the first panel only. Treat a new current size as a display change, compare it when the configuration changes, and look again when the setup finishes.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+Change-Id: Ie26c243ad64bdcca0a9a36d91a2d0817098d13d2
+---
+ .../launcher3/util/DisplayController.java     | 23 +++++++++++++++++--
+ 1 file changed, 21 insertions(+), 2 deletions(-)
+
+diff --git a/src/com/android/launcher3/util/DisplayController.java b/src/com/android/launcher3/util/DisplayController.java
+index cf88948925..83a942f965 100644
+--- a/src/com/android/launcher3/util/DisplayController.java
++++ b/src/com/android/launcher3/util/DisplayController.java
+@@ -148,6 +148,23 @@ public class DisplayController {
+         FileLog.i(TAG, "(CTOR) perDisplayBounds: "
+                 + defaultPerDisplayInfo.mInfo.mPerDisplayBounds);
+ 
++        // Until the user has finished setup the home area is confined to the first panel (Duo), and it spans the
++        // display again afterwards. The window context is not always told about that, so look again when it ends.
++        final android.os.Handler setupHandler = MAIN_EXECUTOR.getHandler();
++        final android.database.ContentObserver setupObserver =
++                new android.database.ContentObserver(setupHandler) {
++                    @Override
++                    public void onChange(boolean selfChange) {
++                        for (long delay : new long[] {0, 1000, 3000}) {
++                            setupHandler.postDelayed(() -> notifyConfigChange(), delay);
++                        }
++                    }
++                };
++        context.getContentResolver().registerContentObserver(
++                android.provider.Settings.Secure.getUriFor(
++                        android.provider.Settings.Secure.USER_SETUP_COMPLETE), false, setupObserver);
++        lifecycle.addCloseable(() -> context.getContentResolver().unregisterContentObserver(setupObserver));
++
+         if (mWMProxy.enableOverviewOnConnectedDisplays()) {
+             final DisplayManager.DisplayListener displayListener =
+                     new DisplayManager.DisplayListener() {
+@@ -275,7 +292,8 @@ public class DisplayController {
+                 != info.showLockedTaskbarOnHome()
+                 || mWMProxy.showDesktopTaskbarForFreeformDisplay(windowContext)
+                 != info.showDesktopTaskbarForFreeformDisplay()
+-                || config.isNightModeActive() != info.mIsNightModeActive) {
++                || config.isNightModeActive() != info.mIsNightModeActive
++                || !mWMProxy.getDisplayInfo(windowContext).size.equals(info.currentSize)) {
+             notifyConfigChange(displayId);
+         }
+     }
+@@ -335,7 +353,8 @@ public class DisplayController {
+ 
+     private int calculateChange(Info oldInfo, Info newInfo) {
+         int change = 0;
+-        if (!newInfo.normalizedDisplayInfo.equals(oldInfo.normalizedDisplayInfo)) {
++        if (!newInfo.normalizedDisplayInfo.equals(oldInfo.normalizedDisplayInfo)
++                || !newInfo.currentSize.equals(oldInfo.currentSize)) {
+             change |= CHANGE_ACTIVE_SCREEN;
+         }
+         if (newInfo.rotation != oldInfo.rotation) {
+-- 
+2.43.0
+
