@@ -1,0 +1,68 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Nicolas Villar <15879262+nvillar@users.noreply.github.com>
+Date: Wed, 4 Nov 2026 02:40:22 -0800
+Subject: [PATCH 3/3] Duo: publish whether the two panel window policy is
+ active
+
+The policy is switched by persist.sys.phh.duo.panels / persist.debug.phh.duo.panels, read once when the default
+display is created; changing them only takes effect after a reboot. A client such as Launcher3 that reads the
+switches directly disagrees with the window hierarchy after a toggle without reboot.
+
+When it builds the default display's policy on a Duo, DuoDisplayAreaPolicyProvider now sets
+sys.duode.panels.active to 1 (two panel hierarchy built) or 0 (platform default). sys.* is system_prop: system_server
+may set it (system_server.te set_prop(system_server, system_prop)), every core and app domain may read it
+(system_prop is a core_property_type), and it is not persistent, so it always describes the current boot. A failure
+to set it is logged and does not affect the window policy.
+
+Not built or run on a device yet; part of the M1 gate prototype.
+
+Co-authored-by: Copilot App <223556219+Copilot@users.noreply.github.com>
+---
+ .../wm/DuoDisplayAreaPolicyProvider.java      | 19 +++++++++++++++++++
+ 1 file changed, 19 insertions(+)
+
+diff --git a/services/core/java/com/android/server/wm/DuoDisplayAreaPolicyProvider.java b/services/core/java/com/android/server/wm/DuoDisplayAreaPolicyProvider.java
+index 292b5c472d01..b718ff6f5cc3 100644
+--- a/services/core/java/com/android/server/wm/DuoDisplayAreaPolicyProvider.java
++++ b/services/core/java/com/android/server/wm/DuoDisplayAreaPolicyProvider.java
+@@ -65,11 +65,13 @@ public class DuoDisplayAreaPolicyProvider implements DisplayAreaPolicy.Provider
+         final DuoPanelGeometry.Spec spec = DuoPanelGeometry.forDevice(Build.DEVICE);
+         if (spec == null || !content.isDefaultDisplay
+                 || !panelsEnabled()) {
++            if (spec != null && content.isDefaultDisplay) publishActive(false);
+             return new DisplayAreaPolicy.DefaultProvider().instantiate(
+                     wmService, content, root, imeContainer);
+         }
+         Slog.i(TAG, "Two panel display area policy for " + Build.DEVICE);
+         sActive = true;
++        publishActive(true);
+ 
+         // Root: what the platform default builds, so system UI windows, the IME, home and spanned apps behave as before.
+         final TaskDisplayArea defaultTda = new TaskDisplayArea(wmService, "DefaultTaskDisplayArea",
+@@ -96,6 +98,23 @@ public class DuoDisplayAreaPolicyProvider implements DisplayAreaPolicy.Provider
+                 || SystemProperties.getBoolean("persist.debug.phh.duo.panels", false);
+     }
+ 
++    /**
++     * Read-only runtime state for other components (Launcher3): 1 when the default display was built with the two panel
++     * hierarchy, 0 otherwise. The persist.* switches can change at any time but only take effect at the next boot, so
++     * a client reading them would disagree with the window policy after a toggle without reboot; this property follows
++     * what was actually built. sys.* is system_prop (system_server may set it, every app domain may read it) and is
++     * not persistent, so it is reset at every boot.
++     */
++    static final String PROP_ACTIVE = "sys.duode.panels.active";
++
++    private static void publishActive(boolean active) {
++        try {
++            SystemProperties.set(PROP_ACTIVE, active ? "1" : "0");
++        } catch (RuntimeException e) {
++            Slog.w(TAG, "Cannot set " + PROP_ACTIVE, e);
++        }
++    }
++
+     /**
+      * Home on a panel: hides every root task of the panel that holds the focused root task, so home (which is
+      * transparent where it has no icon) shows through on that panel only and the other panel keeps its app. Hidden
+-- 
+2.56.0.windows.4
+

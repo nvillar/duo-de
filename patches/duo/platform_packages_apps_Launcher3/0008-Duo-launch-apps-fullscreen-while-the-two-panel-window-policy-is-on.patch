@@ -6,9 +6,13 @@ Subject: [PATCH] Duo: launch apps fullscreen while the two panel window policy
 
 The Duo-DE launch options ask for a freeform window with explicit launch bounds on a tablet sized profile
 (allow_freeform_mode_tablet, on by default). With the framework's two panel policy on, the framework opens a launched
-app fullscreen in the panel that was tapped; a freeform request with bounds fights that routing. While the policy is on
-(persist.sys.phh.duo.panels or persist.debug.phh.duo.panels on a Duo), launch fullscreen and leave the panel choice to
-the framework. With the policy off nothing changes.
+app fullscreen in the panel that was tapped; a freeform request with bounds fights that routing. While the policy is
+active, launch fullscreen and leave the panel choice to the framework. With the policy off nothing changes.
+
+"Active" is the window manager's state for this boot, published by the framework as sys.duode.panels.active
+(frameworks_base "Duo: publish whether the two panel window policy is active"), not the persist.*.phh.duo.panels
+switches, which only take effect after a reboot. Without that framework patch the property is absent and Launcher3
+keeps its previous behaviour.
 
 Not built or run on a device yet; part of the M1 gate prototype.
 
@@ -34,7 +38,7 @@ index 1a4fc5141d..5b58fedd68 100644
              windowMode = 1;
          } else {
 diff --git a/src/com/android/launcher3/util/DuoPanels.java b/src/com/android/launcher3/util/DuoPanels.java
-index f2679b66d6..29e8ca330e 100644
+index f2679b66d6..f68f011dae 100644
 --- a/src/com/android/launcher3/util/DuoPanels.java
 +++ b/src/com/android/launcher3/util/DuoPanels.java
 @@ -17,6 +17,7 @@
@@ -50,14 +54,14 @@ index f2679b66d6..29e8ca330e 100644
      }
  
 +    /**
-+     * True when the framework's two panel window policy is switched on for this Duo (persist.sys.phh.duo.panels or
-+     * persist.debug.phh.duo.panels, as read by DuoDisplayAreaPolicyProvider). The framework reads the properties once
-+     * at boot, so a change only agrees with the window policy after a reboot.
++     * True when the framework built the two panel window hierarchy for this boot. DuoDisplayAreaPolicyProvider publishes
++     * sys.duode.panels.active when it creates the default display; the persist.*.phh.duo.panels switches themselves
++     * only take effect at the next boot, so reading them here would disagree with the window manager after a toggle
++     * without reboot.
 +     */
 +    public static boolean panelPolicyEnabled() {
 +        if (DuoPanelGeometry.forDevice(Build.DEVICE) == null) return false;
-+        return SystemProperties.getBoolean("persist.sys.phh.duo.panels", false)
-+                || SystemProperties.getBoolean("persist.debug.phh.duo.panels", false);
++        return SystemProperties.getBoolean("sys.duode.panels.active", false);
 +    }
 +
      /** True when x is on the right screen; a touch on the hinge goes to the nearer screen. */
