@@ -1,8 +1,7 @@
-From c0c2d7f7226bff80680cc31c4c658a168f5d5321 Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: dhacker29 <dhackerdvm@gmail.com>
 Date: Tue, 24 Nov 2015 01:53:47 -0500
-Subject: [PATCH 1/7] fw/b: Use ro.build.version.incremental to signal OTA
- upgrades
+Subject: [PATCH] fw/b: Use ro.build.version.incremental to signal OTA upgrades
 
 Co-authored-by: maxwen <max.weninger@gmail.com>
 Co-authored-by: Sam Mortimer <sam@mortimer.me.uk>
@@ -76,10 +75,10 @@ index ce9130ad5cbf..737ecae1cc94 100644
          }
          final AppWidgetProviderInfo info = new AppWidgetProviderInfo();
 diff --git a/services/core/java/com/android/server/pm/PackageManagerService.java b/services/core/java/com/android/server/pm/PackageManagerService.java
-index b60812c1bb53..9e1843f3a91e 100644
+index 64a9381ad342..2d9abbb2dfdd 100644
 --- a/services/core/java/com/android/server/pm/PackageManagerService.java
 +++ b/services/core/java/com/android/server/pm/PackageManagerService.java
-@@ -2244,7 +2244,8 @@ public class PackageManagerService implements PackageSender, TestUtilityService
+@@ -2243,7 +2243,8 @@ public class PackageManagerService implements PackageSender, TestUtilityService
              if (mIsUpgrade) {
                  PackageManagerServiceUtils.logCriticalInfo(Log.INFO,
                          "Upgrading from " + ver.fingerprint + " (" + ver.buildFingerprint + ") to "
@@ -88,7 +87,7 @@ index b60812c1bb53..9e1843f3a91e 100644
 +                                + " (" + Build.VERSION.INCREMENTAL + ")");
              }
              mPriorSdkVersion = mIsUpgrade ? ver.sdkVersion : -1;
-             mInitAppsHelper = new InitAppsHelper(this, mApexManager, mInstallPackageHelper,
+             mPriorSdkVersionFull = mIsUpgrade ? ver.sdkVersionFull : -1;
 @@ -2402,7 +2403,7 @@ public class PackageManagerService implements PackageSender, TestUtilityService
                                          | Installer.FLAG_CLEAR_APP_DATA_KEEP_ART_PROFILES);
                      }
@@ -99,10 +98,10 @@ index b60812c1bb53..9e1843f3a91e 100644
              }
  
 diff --git a/services/core/java/com/android/server/pm/PackageManagerServiceUtils.java b/services/core/java/com/android/server/pm/PackageManagerServiceUtils.java
-index 2714a7963b63..a07b37819b9d 100644
+index a4f834530d44..b16efb2ef740 100644
 --- a/services/core/java/com/android/server/pm/PackageManagerServiceUtils.java
 +++ b/services/core/java/com/android/server/pm/PackageManagerServiceUtils.java
-@@ -1394,8 +1394,6 @@ public class PackageManagerServiceUtils {
+@@ -1343,8 +1343,6 @@ public class PackageManagerServiceUtils {
          // that starts with "eng." to signify that this is an engineering build and not
          // destined for release.
          if (isUserDebugBuild && incrementalVersion.startsWith("eng.")) {
@@ -111,7 +110,7 @@ index 2714a7963b63..a07b37819b9d 100644
              // Heuristic: If the /system directory has been modified recently due to an "adb sync"
              // or a regular make, then blow away the cache. Note that mtimes are *NOT* reliable
              // in general and should not be used for production changes. In this specific case,
-@@ -1403,6 +1401,7 @@ public class PackageManagerServiceUtils {
+@@ -1352,6 +1350,7 @@ public class PackageManagerServiceUtils {
              File frameworkDir =
                      new File(Environment.getRootDirectory(), "framework");
              if (cacheDir.lastModified() < frameworkDir.lastModified()) {
@@ -120,12 +119,12 @@ index 2714a7963b63..a07b37819b9d 100644
                  cacheDir = FileUtils.createDir(cacheBaseDir, cacheName);
              }
 diff --git a/services/core/java/com/android/server/pm/Settings.java b/services/core/java/com/android/server/pm/Settings.java
-index 92257f1ee2dd..bf226ca39054 100644
+index 960564b6955f..d4bc94593c38 100644
 --- a/services/core/java/com/android/server/pm/Settings.java
 +++ b/services/core/java/com/android/server/pm/Settings.java
-@@ -486,7 +486,7 @@ public final class Settings implements Watchable, Snappable, ResilientAtomicFile
-         public void forceCurrent() {
-             sdkVersion = Build.VERSION.SDK_INT;
+@@ -514,7 +514,7 @@ public final class Settings implements Watchable, Snappable, ResilientAtomicFile
+             }
+ 
              databaseVersion = CURRENT_DATABASE_VERSION;
 -            buildFingerprint = Build.FINGERPRINT;
 +            buildFingerprint = Build.VERSION.INCREMENTAL;
@@ -133,10 +132,10 @@ index 92257f1ee2dd..bf226ca39054 100644
          }
      }
 diff --git a/services/core/java/com/android/server/pm/ShortcutService.java b/services/core/java/com/android/server/pm/ShortcutService.java
-index 66e9e772e063..f539cc14845a 100644
+index 65ee4e7e7574..be1b3c17f598 100644
 --- a/services/core/java/com/android/server/pm/ShortcutService.java
 +++ b/services/core/java/com/android/server/pm/ShortcutService.java
-@@ -5089,7 +5089,7 @@ public class ShortcutService extends IShortcutService.Stub {
+@@ -5104,7 +5104,7 @@ public class ShortcutService extends IShortcutService.Stub {
  
      // Injection point.
      String injectBuildFingerprint() {
@@ -145,6 +144,3 @@ index 66e9e772e063..f539cc14845a 100644
      }
  
      // Injection point.
--- 
-2.43.0
-

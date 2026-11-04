@@ -1,13 +1,19 @@
-From d79f4433506dfa0d3a12dd9250894a5cc33fd412 Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ethan <ethangoh98@gmail.com>
-Date: Thu, 10 October 2026 8:43:02 +1100
+Date: Sat, 10 Oct 2026 08:43:02 +1100
 Subject: [PATCH] Skip invalid IDs, check for valid context or exit early.
 
+Change-Id: Ib1872234c960228cbe8ddac57b9089f6625975c2
+---
+ .../accessibility/LauncherAccessibilityDelegate.java       | 3 ++-
+ src/com/android/launcher3/util/ActivityOptionsWrapper.java | 7 +++++++
+ 2 files changed, 9 insertions(+), 1 deletion(-)
+
 diff --git a/src/com/android/launcher3/accessibility/LauncherAccessibilityDelegate.java b/src/com/android/launcher3/accessibility/LauncherAccessibilityDelegate.java
-index df34ccf090..1704a2104f 100644
+index 094f792c65..9e037988c4 100644
 --- a/src/com/android/launcher3/accessibility/LauncherAccessibilityDelegate.java
 +++ b/src/com/android/launcher3/accessibility/LauncherAccessibilityDelegate.java
-@@ -396,7 +396,8 @@ public class LauncherAccessibilityDelegate extends BaseAccessibilityDelegate<Lau
+@@ -411,7 +411,8 @@ public class LauncherAccessibilityDelegate extends BaseAccessibilityDelegate<Lau
              screenIndex++;
          }
  
@@ -18,7 +24,7 @@ index df34ccf090..1704a2104f 100644
          }
  
 diff --git a/src/com/android/launcher3/util/ActivityOptionsWrapper.java b/src/com/android/launcher3/util/ActivityOptionsWrapper.java
-index ec380af9c5..6f174c91fe 100644
+index 279390a00b..2d9fcbe7c1 100644
 --- a/src/com/android/launcher3/util/ActivityOptionsWrapper.java
 +++ b/src/com/android/launcher3/util/ActivityOptionsWrapper.java
 @@ -42,6 +42,7 @@ public class ActivityOptionsWrapper {
@@ -41,4 +47,4 @@ index ec380af9c5..6f174c91fe 100644
 +
          String mode = "freeform";
          int windowMode;
-         Boolean isTabletMode = ActivityContext.lookupContext(this.context).getDeviceProfile().isTablet;
+         Boolean isTabletMode = ActivityContext.lookupContext(this.context).getDeviceProfile().getDeviceProperties().isTablet();
