@@ -196,6 +196,7 @@ Useful options (`dev/build.sh --help`):
 | `--ota-url URL` | updater feed to bake in (https only; Archfx URLs are refused) |
 | `--reset-patches` | abort a stuck `git am`, force patched projects back to their manifest revision (discarding tracked changes in them) and re-apply all patches |
 | `--patch-only` | apply patches and generate makefiles, then stop |
+| `--repair-checkouts` | `git reset --hard HEAD` broken checkouts in unpatched projects without local commits (see 5.8) |
 | `--unshallow` | fetch full history and the `android-16.0.0_r*` tags for patched projects before applying patches |
 | `--skip-treble-app` | keep the TrebleApp already in `vendor/hardware_overlay` |
 | `--no-installclean` | skip `make installclean` for faster incremental builds |
@@ -251,6 +252,17 @@ Verify the checksum on Windows before flashing:
 ```powershell
 (Get-FileHash .\system-treble_arm64_bvN-<build-id>.img -Algorithm SHA256).Hash
 ```
+
+### 5.8 Troubleshooting
+
+| Symptom | Cause and fix |
+|---|---|
+| `repo sync` fails with HTTP 429 | Rate limiting by android.googlesource.com. Wait, then rerun `dev/sync.sh` with `--jobs 2` (see 5.1). |
+| `dev/build.sh` stops: *projects have staged changes or a broken checkout*; or Soong fails with undefined modules such as `python-symbol` or `platform_tools_version` | An interrupted `repo sync` checkout left every tracked file of a project staged for deletion (seen in `development` and `developers/build`). Before patching, `dev/build.sh` checks that every project that is not a patch target has an index equal to its HEAD (one `git diff --cached --quiet` per project from `.repo/project.list`), and lists those that do not. Repair each with `git -C ~/aosp/<project> reset --hard HEAD`, or rerun with `--repair-checkouts`, which does this only for projects whose HEAD is still the manifest revision (no local commits). Patch targets are handled by the patch step (`--reset-patches`). |
+| `sha1 information is lacking or useless ... could not build fake ancestor` | Missing history or base tags in a patched project: rerun with `--reset-patches --unshallow` (see 5.1). |
+| A patch set fails to apply for another reason | Run `dev/check-apply.sh` to list every failing patch, then regenerate them (see 5.5). |
+| `crun: ... sd-bus call: Permission denied` | Rootless Podman without a systemd user session; see 4.2. |
+| *a dev/build.sh or dev/sync.sh is running on the tree* | Another developer script holds `<tree>/.duo-dev/lock`. Wait for it to finish. |
 
 ## 6. Flashing a system image
 
