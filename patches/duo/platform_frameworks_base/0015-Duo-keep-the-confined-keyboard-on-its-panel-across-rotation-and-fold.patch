@@ -52,10 +52,10 @@ index 01bc3db87117..d5cf63ecfea8 100644
          if (target != null && target.isImeOverlayLayeringTarget()) {
              mWmService.dispatchImeOverlayLayeringTargetVisibilityChanged(target.mClient.asBinder(),
 diff --git a/services/core/java/com/android/server/wm/DuoDisplayAreaPolicyProvider.java b/services/core/java/com/android/server/wm/DuoDisplayAreaPolicyProvider.java
-index 5e6039314f44..292b5c472d01 100644
+index 25fb5ea8c9c0..f926c8ae858b 100644
 --- a/services/core/java/com/android/server/wm/DuoDisplayAreaPolicyProvider.java
 +++ b/services/core/java/com/android/server/wm/DuoDisplayAreaPolicyProvider.java
-@@ -226,6 +226,7 @@ public class DuoDisplayAreaPolicyProvider implements DisplayAreaPolicy.Provider
+@@ -238,6 +238,7 @@ public class DuoDisplayAreaPolicyProvider implements DisplayAreaPolicy.Provider
       */
      static void updateOrder(DisplayContent display) {
          if (!sActive || display == null || !display.isDefaultDisplay) return;
@@ -63,7 +63,7 @@ index 5e6039314f44..292b5c472d01 100644
          final TaskDisplayArea home = display.getDefaultTaskDisplayArea();
          final WindowContainer parent = home == null ? null : home.getParent();
          if (parent == null) return;
-@@ -277,9 +278,11 @@ public class DuoDisplayAreaPolicyProvider implements DisplayAreaPolicy.Provider
+@@ -289,9 +290,11 @@ public class DuoDisplayAreaPolicyProvider implements DisplayAreaPolicy.Provider
       * so the keyboard of an app on one panel was laid out 2754 px wide (Gboard picks its wide split layout, the keys run
       * over the hinge and over the other panel). The IME container takes the bounds of the layering target's task: a
       * panel task gives a panel wide keyboard, a spanned task (or none) the display wide one.
@@ -77,7 +77,7 @@ index 5e6039314f44..292b5c472d01 100644
          final Task task = target != null ? target.getTask() : null;
          final Rect want = new Rect();
          if (task != null && !task.getBounds().isEmpty() && !task.getBounds().equals(display.getBounds())) {
-@@ -288,6 +291,23 @@ public class DuoDisplayAreaPolicyProvider implements DisplayAreaPolicy.Provider
+@@ -300,6 +303,23 @@ public class DuoDisplayAreaPolicyProvider implements DisplayAreaPolicy.Provider
          if (!want.equals(imeContainer.getRequestedOverrideBounds())) {
              Slog.i(TAG, "IME bounds " + want + " for " + target);
              imeContainer.setBounds(want);

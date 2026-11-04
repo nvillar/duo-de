@@ -15,6 +15,11 @@ FLAG_FORCE_HIDDEN_FOR_TASK_ORG, which belongs to Shell's task organizer.
   moveToTop), in any task display area, not only in a panel. That is after ActivityStarter.isAllowedToStart() and
   only for launches that may move to front (background and avoidMoveToFront launches do not), and also covers
   recents and the reparent-to-default-area path after a fold (getOrCreateRootTask reparents, moveTaskToFront follows).
+- A restore clears the flag on the positioned root and every task below it, and Task.onParentChanged drops the flag
+  when a task is nested under another task (an organizer's launch root: Recents to split screen reparents through
+  RootWindowContainer.anyTaskForId before the root is moved to front). The flag is only meaningful on a panel root
+  task; a root task moved to another task display area keeps it until it is moved to front, so a background
+  reparent (avoidMoveToFront) does not show it.
 - panelForLaunch, which runs while launch params are computed, before the launch is allowed, no longer changes any
   task state; it only decides a panel.
 - panelForLaunch leaves launches from an activity on another display alone (a home on an external display passes
@@ -24,13 +29,14 @@ Not built or run on a device yet; part of the M1 gate prototype.
 
 Co-authored-by: Copilot App <223556219+Copilot@users.noreply.github.com>
 ---
- .../wm/DuoDisplayAreaPolicyProvider.java      | 34 +++++++++++++++----
- .../android/server/wm/TaskDisplayArea.java    |  9 ++---
- .../com/android/server/wm/TaskFragment.java   |  6 ++++
- 3 files changed, 38 insertions(+), 11 deletions(-)
+ .../wm/DuoDisplayAreaPolicyProvider.java      | 46 ++++++++++++++++---
+ .../core/java/com/android/server/wm/Task.java | 12 +++++
+ .../android/server/wm/TaskDisplayArea.java    |  9 ++--
+ .../com/android/server/wm/TaskFragment.java   |  6 +++
+ 4 files changed, 62 insertions(+), 11 deletions(-)
 
 diff --git a/services/core/java/com/android/server/wm/DuoDisplayAreaPolicyProvider.java b/services/core/java/com/android/server/wm/DuoDisplayAreaPolicyProvider.java
-index 323e4d03f9fe..5e6039314f44 100644
+index 323e4d03f9fe..25fb5ea8c9c0 100644
 --- a/services/core/java/com/android/server/wm/DuoDisplayAreaPolicyProvider.java
 +++ b/services/core/java/com/android/server/wm/DuoDisplayAreaPolicyProvider.java
 @@ -99,8 +99,9 @@ public class DuoDisplayAreaPolicyProvider implements DisplayAreaPolicy.Provider
@@ -54,7 +60,7 @@ index 323e4d03f9fe..5e6039314f44 100644
          }
          // Hiding a task only takes effect (activities stop, surfaces go away) in a visibility pass, which the Home
          // start has already done or skips; run one right after, outside the current call chain.
-@@ -147,6 +148,24 @@ public class DuoDisplayAreaPolicyProvider implements DisplayAreaPolicy.Provider
+@@ -147,6 +148,36 @@ public class DuoDisplayAreaPolicyProvider implements DisplayAreaPolicy.Provider
          });
      }
  
@@ -65,21 +71,33 @@ index 323e4d03f9fe..5e6039314f44 100644
 +     * wherever it lives now: a reused task may have left its panel (for example reparented to the default area after a
 +     * fold to a single panel, then moved to front there) and must not stay invisible there.
 +     *
-+     * @return whether the task was hidden by the policy and is now restored.
++     * Clears the flag on the positioned root task and on every task below it: the flag is set on panel root tasks, but
++     * a privileged caller can nest such a task under an organizer root before the root is moved to front (Recents to
++     * split screen: setLaunchRootTask, then RootWindowContainer.anyTaskForId reparents the task into the launch root).
++     * Task.onParentChanged also clears the flag when a task gets nested, so this is a second line of defence.
++     *
++     * @return whether a task hidden by the policy was restored.
 +     */
 +    static boolean restoreHiddenByPolicy(@Nullable Task task) {
 +        final Task root = task != null ? task.getRootTask() : null;
-+        if (root == null || !root.setForceHidden(Task.FLAG_FORCE_HIDDEN_FOR_DUO_PANEL, false /* set */)) {
-+            return false;
++        if (root == null) return false;
++        // Collect first: un-hiding an always-on-top task moves it, which must not happen while iterating.
++        final List<Task> tasks = new ArrayList<>();
++        root.forAllTasks((Consumer<Task>) tasks::add);
++        boolean restored = false;
++        for (int i = 0; i < tasks.size(); i++) {
++            if (tasks.get(i).setForceHidden(Task.FLAG_FORCE_HIDDEN_FOR_DUO_PANEL, false /* set */)) {
++                Slog.i(TAG, "Restored minimized " + tasks.get(i));
++                restored = true;
++            }
 +        }
-+        Slog.i(TAG, "Restored minimized " + root);
-+        return true;
++        return restored;
 +    }
 +
      /**
       * The panel a launch should go to, from where the user tapped. A launcher passes the on-screen rectangle of the
       * tapped icon as the intent's source bounds; the panel containing it gets the new task, so an icon on the left
-@@ -158,7 +177,12 @@ public class DuoDisplayAreaPolicyProvider implements DisplayAreaPolicy.Provider
+@@ -158,7 +189,12 @@ public class DuoDisplayAreaPolicyProvider implements DisplayAreaPolicy.Provider
      @Nullable
      static TaskDisplayArea panelForLaunch(DisplayContent dc, @Nullable ActivityRecord source,
              @Nullable ActivityRecord record, @Nullable Task existingTask) {
@@ -92,7 +110,7 @@ index 323e4d03f9fe..5e6039314f44 100644
          // An app that already has a task is moved to / kept on the tapped panel; without this the platform falls back
          // to the launcher's task area and pulls the task out of its panel into the spanned area.
          if (existingTask != null && !existingTask.isActivityTypeStandard()) return null;
-@@ -185,10 +209,6 @@ public class DuoDisplayAreaPolicyProvider implements DisplayAreaPolicy.Provider
+@@ -185,10 +221,6 @@ public class DuoDisplayAreaPolicyProvider implements DisplayAreaPolicy.Provider
          final TaskDisplayArea target = in0 != in1 ? (in0 ? first : second)
                  // On the hinge or outside both: the nearer panel
                  : (distance(b0, x, y) <= distance(b1, x, y) ? first : second);
@@ -103,6 +121,29 @@ index 323e4d03f9fe..5e6039314f44 100644
          return target;
      }
  
+diff --git a/services/core/java/com/android/server/wm/Task.java b/services/core/java/com/android/server/wm/Task.java
+index b5698711ed6c..8fbcc924f587 100644
+--- a/services/core/java/com/android/server/wm/Task.java
++++ b/services/core/java/com/android/server/wm/Task.java
+@@ -1163,6 +1163,18 @@ class Task extends TaskFragment {
+             cleanUpResourcesForDestroy(oldParent);
+         }
+ 
++        if (newParent != null && newParent.asTask() != null
++                && (mForceHiddenFlags & FLAG_FORCE_HIDDEN_FOR_DUO_PANEL) != 0) {
++            // Duo two panel policy: the Home minimize flag only has a meaning on a root task in a panel. Nested under
++            // another task (an organizer's launch root, e.g. Recents to split screen) its visibility belongs to that
++            // root and nothing would ever clear the flag: drop it. Cleared without side effects (no reorder) while the
++            // task is being reparented; the visibility pass that follows the reparent applies it. A root task moved to
++            // another task display area keeps the flag until it is moved to front (TaskDisplayArea), so a background
++            // reparent (avoidMoveToFront) does not show it.
++            mForceHiddenFlags &= ~FLAG_FORCE_HIDDEN_FOR_DUO_PANEL;
++            Slog.i(TAG, "Duo: Home minimize cleared, nested under " + newParent + ": " + this);
++        }
++
+         if (display != null) {
+             // TODO(b/168037178): Chat with the erosky@ of this code to see if this really makes
+             //                    sense here...
 diff --git a/services/core/java/com/android/server/wm/TaskDisplayArea.java b/services/core/java/com/android/server/wm/TaskDisplayArea.java
 index 3167d39aa731..76409f35513d 100644
 --- a/services/core/java/com/android/server/wm/TaskDisplayArea.java

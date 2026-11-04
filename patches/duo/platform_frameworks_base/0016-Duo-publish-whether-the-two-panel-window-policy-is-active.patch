@@ -22,7 +22,7 @@ Co-authored-by: Copilot App <223556219+Copilot@users.noreply.github.com>
  1 file changed, 19 insertions(+)
 
 diff --git a/services/core/java/com/android/server/wm/DuoDisplayAreaPolicyProvider.java b/services/core/java/com/android/server/wm/DuoDisplayAreaPolicyProvider.java
-index 292b5c472d01..b718ff6f5cc3 100644
+index f926c8ae858b..5c553dec8dc9 100644
 --- a/services/core/java/com/android/server/wm/DuoDisplayAreaPolicyProvider.java
 +++ b/services/core/java/com/android/server/wm/DuoDisplayAreaPolicyProvider.java
 @@ -65,11 +65,13 @@ public class DuoDisplayAreaPolicyProvider implements DisplayAreaPolicy.Provider
