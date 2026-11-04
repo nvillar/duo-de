@@ -1,0 +1,296 @@
+From f4f31c342e2ed4ba8e8e8fbf3a7fba964d779d76 Mon Sep 17 00:00:00 2001
+From: Nicolas Villar <15879262+nvillar@users.noreply.github.com>
+Date: Wed, 4 Nov 2026 00:06:05 -0800
+Subject: [PATCH] PaneManager: classify single, gapless and spanned displays
+ like DuoPanelGeometry
+
+The pane states derived in 0013 treated any display longer than one panel as spanned: max(width, height) > panel. A
+single screen in phone mode is panel x height (Duo 1350x1800, Duo 2 1344x1892), so its long side is the panel height
+and it was reported as spanned, with an occupied second pane off the right edge of the display. The rects were also
+always in natural (rotation 0) coordinates, so they did not match the display once rotated.
+
+Move the arithmetic to PaneGeometry (no android.* classes), which mirrors the mode and layout semantics of the
+framework's DuoPanelGeometry (hidden framework code, not linkable from this sdk_version: "current" library):
+
+- spanned (2 * panel + hinge long) and gapless (2 * panel long, persist.sys.phh.duo.disable_hinge=1, detected from the
+  display size like HingeMath.isGapless): two occupied panes, pane 0 in focus;
+- single panel, either orientation: pane 0 is the whole display, pane 1 is empty and unoccupied (the array keeps two
+  entries so callers that index pane 1 keep working; which physical screen is lit cannot be told from the size);
+- any other size (scaled or letterboxed display) or device: no panes;
+- rects follow the current display rotation, pane 0 tracking the physical left panel.
+
+Microsoft Launcher keeps its intentional no-connect behaviour. Host test surface-sdk/test/PaneGeometryTest.java
+(same vectors as DuoPanelGeometryTest plus Duo 1 rotations and the phone-mode regression).
+
+Co-authored-by: Copilot App <223556219+Copilot@users.noreply.github.com>
+---
+ .../device/layoutmanager/PaneGeometry.java    |  79 +++++++++++++
+ .../device/layoutmanager/PaneManager.java     |  45 +++++---
+ surface-sdk/test/PaneGeometryTest.java        | 108 ++++++++++++++++++
+ 3 files changed, 214 insertions(+), 18 deletions(-)
+ create mode 100644 surface-sdk/java/com/microsoft/device/layoutmanager/PaneGeometry.java
+ create mode 100644 surface-sdk/test/PaneGeometryTest.java
+
+diff --git a/surface-sdk/java/com/microsoft/device/layoutmanager/PaneGeometry.java b/surface-sdk/java/com/microsoft/device/layoutmanager/PaneGeometry.java
+new file mode 100644
+index 0000000..363609d
+--- /dev/null
++++ b/surface-sdk/java/com/microsoft/device/layoutmanager/PaneGeometry.java
+@@ -0,0 +1,79 @@
++package com.microsoft.device.layoutmanager;
++
++/**
++ * Pure integer pane geometry for PaneManager, kept free of android.* classes so it can be unit tested on the host.
++ *
++ * Mirrors the mode and layout semantics of frameworks/base com.android.internal.policy.DuoPanelGeometry (that class is
++ * hidden framework code and cannot be linked from this sdk_version: "current" library), so the two must agree:
++ * test/PaneGeometryTest.java uses the same vectors as DuoPanelGeometryTest.
++ *
++ * The device is described in its natural (rotation 0) orientation: panel 0 on the left, the hinge band, panel 1 on the
++ * right. Spanned: the display is 2 * panel + hinge long. Gapless (persist.sys.phh.duo.disable_hinge=1, the display is
++ * shrunk to drop the hinge pixels): exactly 2 * panel long. Single: one panel (panel x height, either rotation).
++ * Anything else is unknown. Rectangles are {left, top, right, bottom} in the coordinates of the display at the given
++ * Surface.ROTATION_* value, so pane 0 follows the physical left panel as the device turns.
++ */
++final class PaneGeometry {
++    static final int MODE_SPANNED = 0;
++    static final int MODE_GAPLESS = 1;
++    static final int MODE_SINGLE = 2;
++    static final int MODE_UNKNOWN = 3;
++
++    /** {panel, hinge, height} of the Surface Duo 2 and the Surface Duo, in natural orientation. */
++    static final int[] DUO2 = {1344, 66, 1892};
++    static final int[] DUO = {1350, 84, 1800};
++
++    private PaneGeometry() { }
++
++    /** The {panel, hinge, height} spec for a Build.DEVICE value (case-insensitive), or null when it is not a Duo. */
++    static int[] specForDevice(String device) {
++        if (device == null) return null;
++        String d = device.toLowerCase(java.util.Locale.ROOT);
++        if (d.equals("duo2")) return DUO2.clone();
++        if (d.equals("duo")) return DUO.clone();
++        return null;
++    }
++
++    /** How a display of the given size relates to the device, whatever its rotation. */
++    static int mode(int[] spec, int displayWidth, int displayHeight) {
++        if (spec == null) return MODE_UNKNOWN;
++        int panel = spec[0], hinge = spec[1], height = spec[2];
++        int longSide = Math.max(displayWidth, displayHeight);
++        int shortSide = Math.min(displayWidth, displayHeight);
++        // One panel is panel x height, so its short side is the panel width, not the height.
++        if (shortSide == panel && longSide == height) return MODE_SINGLE;
++        if (shortSide != height) return MODE_UNKNOWN;
++        if (longSide == 2 * panel + hinge) return MODE_SPANNED;
++        if (longSide == 2 * panel) return MODE_GAPLESS;
++        return MODE_UNKNOWN;
++    }
++
++    /**
++     * The pane rects {pane 0, pane 1} for a display of the given size and rotation. Spanned / gapless: both panels.
++     * Single: pane 0 is the whole display and pane 1 is empty (all zeros); which physical panel is lit cannot be told
++     * from the size alone. Unknown size or device: null.
++     */
++    static int[][] panes(int[] spec, int displayWidth, int displayHeight, int rotation) {
++        int mode = mode(spec, displayWidth, displayHeight);
++        if (mode == MODE_UNKNOWN) return null;
++        if (mode == MODE_SINGLE) {
++            return new int[][] {{0, 0, displayWidth, displayHeight}, {0, 0, 0, 0}};
++        }
++        int panel = spec[0], h = spec[2];
++        int hinge = mode == MODE_SPANNED ? spec[1] : 0;
++        int w = 2 * panel + hinge;   // natural width
++        return new int[][] {
++            rotate(new int[] {0, 0, panel, h}, w, h, rotation),
++            rotate(new int[] {panel + hinge, 0, w, h}, w, h, rotation)};
++    }
++
++    /** Maps a rect from the natural (rotation 0, w x h) display to the display at {@code rotation}. */
++    static int[] rotate(int[] r, int w, int h, int rotation) {
++        switch (rotation & 3) {
++            case 1:  return new int[] {r[1], w - r[2], r[3], w - r[0]};
++            case 2:  return new int[] {w - r[2], h - r[3], w - r[0], h - r[1]};
++            case 3:  return new int[] {h - r[3], r[0], h - r[1], r[2]};
++            default: return r.clone();
++        }
++    }
++}
+diff --git a/surface-sdk/java/com/microsoft/device/layoutmanager/PaneManager.java b/surface-sdk/java/com/microsoft/device/layoutmanager/PaneManager.java
+index e2aa9eb..5984172 100644
+--- a/surface-sdk/java/com/microsoft/device/layoutmanager/PaneManager.java
++++ b/surface-sdk/java/com/microsoft/device/layoutmanager/PaneManager.java
+@@ -134,29 +134,38 @@ public final class PaneManager {
+     }
+ 
+     /**
+-     * Pane 0 is the left screen, pane 1 the right one, in the natural (wide) orientation. A display as wide as both screens
+-     * means the content spans both panes; a display one screen wide means a single pane, the left one.
++     * Pane 0 is the physical left screen, pane 1 the right one; rects are in the coordinates of the default display at
++     * its current rotation (PaneGeometry, same semantics as the framework's DuoPanelGeometry). Spanned or gapless
++     * (both screens lit): two occupied panes, pane 0 in focus. Single screen (phone mode): pane 0 is the whole display
++     * and pane 1 is reported empty and unoccupied, never a second pane off the edge of the display. Unknown sizes
++     * (another device, a scaled or letterboxed display) report no panes, like before a connection.
+      */
+     private PaneState[] currentPaneStates() {
+-        final String device = Build.DEVICE == null ? "" : Build.DEVICE.toLowerCase();
+-        final int panel, hinge, height;
+-        if (device.equals("duo2")) { panel = 1344; hinge = 66; height = 1892; }
+-        else if (device.equals("duo")) { panel = 1350; hinge = 84; height = 1800; }
+-        else return new PaneState[0];
+-        int longSide = panel;
++        final int[] spec = PaneGeometry.specForDevice(Build.DEVICE);
++        final Context context = mContext;
++        if (spec == null || context == null) return new PaneState[0];
++        final int width, height, rotation;
+         try {
+-            DisplayManager dm = mContext.getSystemService(DisplayManager.class);
++            DisplayManager dm = context.getSystemService(DisplayManager.class);
+             Display d = dm == null ? null : dm.getDisplay(Display.DEFAULT_DISPLAY);
+-            if (d != null) {
+-                android.util.DisplayMetrics m = new android.util.DisplayMetrics();
+-                d.getRealMetrics(m);
+-                longSide = Math.max(m.widthPixels, m.heightPixels);
+-            }
+-        } catch (RuntimeException ignored) {
++            if (d == null) return new PaneState[0];
++            android.util.DisplayMetrics m = new android.util.DisplayMetrics();
++            d.getRealMetrics(m);
++            width = m.widthPixels;
++            height = m.heightPixels;
++            rotation = d.getRotation();
++        } catch (RuntimeException e) {
++            return new PaneState[0];
+         }
+-        final boolean spanned = longSide > panel;
+-        final PaneState left = new PaneState(0, new Rect(0, 0, panel, height), true, true);
+-        final PaneState right = new PaneState(1, new Rect(panel + hinge, 0, 2 * panel + hinge, height), false, spanned);
++        final int[][] panes = PaneGeometry.panes(spec, width, height, rotation);
++        if (panes == null) return new PaneState[0];
++        final boolean dual = PaneGeometry.mode(spec, width, height) != PaneGeometry.MODE_SINGLE;
++        final PaneState left = new PaneState(0, toRect(panes[0]), true, true);
++        final PaneState right = new PaneState(1, toRect(panes[1]), false, dual);
+         return new PaneState[] {left, right};
+     }
++
++    private static Rect toRect(int[] r) {
++        return new Rect(r[0], r[1], r[2], r[3]);
++    }
+ }
+diff --git a/surface-sdk/test/PaneGeometryTest.java b/surface-sdk/test/PaneGeometryTest.java
+new file mode 100644
+index 0000000..10a7b1e
+--- /dev/null
++++ b/surface-sdk/test/PaneGeometryTest.java
+@@ -0,0 +1,108 @@
++package com.microsoft.device.layoutmanager;
++
++import java.util.Arrays;
++
++/**
++ * Host test for PaneGeometry (no Android classes). Vectors follow frameworks/base DuoPanelGeometryTest so the two
++ * implementations keep the same semantics. Run from surface-sdk:
++ *   javac -d /tmp/pg java/com/microsoft/device/layoutmanager/PaneGeometry.java test/PaneGeometryTest.java
++ *   java -cp /tmp/pg com.microsoft.device.layoutmanager.PaneGeometryTest
++ */
++public class PaneGeometryTest {
++    static int failures;
++    static final int[] Z = {0, 0, 0, 0};
++
++    static void eq(String what, Object want, Object got) {
++        boolean same = want instanceof int[] && got instanceof int[]
++                ? Arrays.equals((int[]) want, (int[]) got) : java.util.Objects.equals(want, got);
++        if (!same) {
++            failures++;
++            System.out.println("FAIL " + what + ": want " + str(want) + " got " + str(got));
++        } else System.out.println("ok   " + what);
++    }
++
++    static String str(Object o) {
++        return o instanceof int[] ? Arrays.toString((int[]) o) : String.valueOf(o);
++    }
++
++    static void panes(String what, int[] spec, int w, int h, int rot, int[] p0, int[] p1) {
++        int[][] got = PaneGeometry.panes(spec, w, h, rot);
++        if (got == null) { failures++; System.out.println("FAIL " + what + ": no panes"); return; }
++        eq(what + " pane0", p0, got[0]);
++        eq(what + " pane1", p1, got[1]);
++    }
++
++    public static void main(String[] a) {
++        int[] d1 = PaneGeometry.DUO, d2 = PaneGeometry.DUO2;
++        eq("forDevice duo", Arrays.toString(d1), Arrays.toString(PaneGeometry.specForDevice("duo")));
++        eq("forDevice DUO2 (case)", Arrays.toString(d2), Arrays.toString(PaneGeometry.specForDevice("DUO2")));
++        eq("forDevice other", null, PaneGeometry.specForDevice("panther"));
++        eq("forDevice null", null, PaneGeometry.specForDevice(null));
++
++        // modes, both rotations of each size
++        eq("d1 spanned", PaneGeometry.MODE_SPANNED, PaneGeometry.mode(d1, 2784, 1800));
++        eq("d1 spanned portrait", PaneGeometry.MODE_SPANNED, PaneGeometry.mode(d1, 1800, 2784));
++        eq("d1 gapless", PaneGeometry.MODE_GAPLESS, PaneGeometry.mode(d1, 2700, 1800));
++        eq("d1 gapless portrait", PaneGeometry.MODE_GAPLESS, PaneGeometry.mode(d1, 1800, 2700));
++        eq("d1 single 1350x1800 (the regression)", PaneGeometry.MODE_SINGLE, PaneGeometry.mode(d1, 1350, 1800));
++        eq("d1 single landscape", PaneGeometry.MODE_SINGLE, PaneGeometry.mode(d1, 1800, 1350));
++        eq("d2 spanned", PaneGeometry.MODE_SPANNED, PaneGeometry.mode(d2, 2754, 1892));
++        eq("d2 gapless", PaneGeometry.MODE_GAPLESS, PaneGeometry.mode(d2, 1892, 2688));
++        eq("d2 single 1344x1892 (the regression)", PaneGeometry.MODE_SINGLE, PaneGeometry.mode(d2, 1344, 1892));
++        eq("d2 single landscape", PaneGeometry.MODE_SINGLE, PaneGeometry.mode(d2, 1892, 1344));
++        // unknown
++        eq("no spec", PaneGeometry.MODE_UNKNOWN, PaneGeometry.mode(null, 2754, 1892));
++        eq("d2 wrong height", PaneGeometry.MODE_UNKNOWN, PaneGeometry.mode(d2, 2754, 1800));
++        eq("d2 letterboxed", PaneGeometry.MODE_UNKNOWN, PaneGeometry.mode(d2, 2600, 1892));
++        eq("d1 scaled", PaneGeometry.MODE_UNKNOWN, PaneGeometry.mode(d1, 1080, 1920));
++        eq("d1 sizes on a duo2", PaneGeometry.MODE_UNKNOWN, PaneGeometry.mode(d2, 2784, 1800));
++        eq("unknown has no panes", null, PaneGeometry.panes(d2, 2600, 1892, 0));
++        eq("no spec has no panes", null, PaneGeometry.panes(null, 2754, 1892, 0));
++
++        // Duo 1 spanned, all rotations (rotation 1: pane 0 at the bottom, 2: on the right, 3: at the top)
++        panes("d1 spanned rot0", d1, 2784, 1800, 0, new int[] {0, 0, 1350, 1800}, new int[] {1434, 0, 2784, 1800});
++        panes("d1 spanned rot1", d1, 1800, 2784, 1, new int[] {0, 1434, 1800, 2784}, new int[] {0, 0, 1800, 1350});
++        panes("d1 spanned rot2", d1, 2784, 1800, 2, new int[] {1434, 0, 2784, 1800}, new int[] {0, 0, 1350, 1800});
++        panes("d1 spanned rot3", d1, 1800, 2784, 3, new int[] {0, 0, 1800, 1350}, new int[] {0, 1434, 1800, 2784});
++        // Duo 2 spanned, same vectors as DuoPanelGeometryTest
++        panes("d2 spanned rot0", d2, 2754, 1892, 0, new int[] {0, 0, 1344, 1892}, new int[] {1410, 0, 2754, 1892});
++        panes("d2 spanned rot1", d2, 1892, 2754, 1, new int[] {0, 1410, 1892, 2754}, new int[] {0, 0, 1892, 1344});
++        panes("d2 spanned rot2", d2, 2754, 1892, 2, new int[] {1410, 0, 2754, 1892}, new int[] {0, 0, 1344, 1892});
++        panes("d2 spanned rot3", d2, 1892, 2754, 3, new int[] {0, 0, 1892, 1344}, new int[] {0, 1410, 1892, 2754});
++        // gapless: panels touch, no hinge pixels
++        panes("d1 gapless rot0", d1, 2700, 1800, 0, new int[] {0, 0, 1350, 1800}, new int[] {1350, 0, 2700, 1800});
++        panes("d1 gapless rot1", d1, 1800, 2700, 1, new int[] {0, 1350, 1800, 2700}, new int[] {0, 0, 1800, 1350});
++        panes("d2 gapless rot0", d2, 2688, 1892, 0, new int[] {0, 0, 1344, 1892}, new int[] {1344, 0, 2688, 1892});
++        // single panel: pane 0 is the display, pane 1 empty, never off the edge of the display
++        for (int rot = 0; rot < 4; rot++) {
++            boolean portrait = (rot & 1) == 1;
++            panes("d1 single rot" + rot, d1, portrait ? 1800 : 1350, portrait ? 1350 : 1800, rot,
++                    new int[] {0, 0, portrait ? 1800 : 1350, portrait ? 1350 : 1800}, Z);
++            panes("d2 single rot" + rot, d2, portrait ? 1892 : 1344, portrait ? 1344 : 1892, rot,
++                    new int[] {0, 0, portrait ? 1892 : 1344, portrait ? 1344 : 1892}, Z);
++        }
++        // every pane rect of a dual layout lies inside the display and the two panes cover two panels
++        int[][] specs = {d1, d2};
++        for (int[] s : specs) {
++            for (int gap = 0; gap < 2; gap++) {
++                for (int rot = 0; rot < 4; rot++) {
++                    int w = 2 * s[0] + (gap == 0 ? s[1] : 0), h = s[2];
++                    boolean portrait = (rot & 1) == 1;
++                    int dw = portrait ? h : w, dh = portrait ? w : h;
++                    int[][] l = PaneGeometry.panes(s, dw, dh, rot);
++                    boolean inside = l != null;
++                    long area = 0;
++                    if (l != null) for (int[] r : l) {
++                        inside &= r[0] >= 0 && r[1] >= 0 && r[2] <= dw && r[3] <= dh;
++                        area += (long) (r[2] - r[0]) * (r[3] - r[1]);
++                    }
++                    String tag = s[0] + (gap == 0 ? " spanned" : " gapless") + " rot" + rot;
++                    eq("inside " + tag, true, inside);
++                    eq("area " + tag, (long) 2 * s[0] * s[2], area);
++                }
++            }
++        }
++        System.out.println(failures == 0 ? "ALL PASS" : failures + " FAILURES");
++        if (failures != 0) System.exit(1);
++    }
++}
+-- 
+2.56.0.windows.4
+
