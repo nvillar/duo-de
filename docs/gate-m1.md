@@ -13,9 +13,11 @@ Harness branch `m1-gate-prototype` on top of the reproducible dev build harness:
 | frameworks_base 0009/0010 | setup wizard on the first panel |
 | frameworks_base 0011 | launcher icon routed to its panel even with `launchDisplayId=0` (finding P1a) |
 | frameworks_base 0012/0013 | IME container takes the target task's panel bounds |
-| frameworks_base 0014 | Home-minimized tasks use their own hidden flag and are restored on any relaunch (finding P1b) |
+| frameworks_base 0014 | Home-minimized tasks use their own hidden flag, restored when the task is moved to front again (finding P1b) |
+| frameworks_base 0015 | IME confinement re-evaluated on rotation/fold with an unchanged IME target |
+| frameworks_base 0016 | publishes `sys.duode.panels.active` (two panel hierarchy built this boot) |
 | Launcher3 0007 | refresh display size when setup ends |
-| Launcher3 0008 | fullscreen launches (no freeform, no launch bounds) while the policy is on |
+| Launcher3 0008 | fullscreen launches (no freeform, no launch bounds) while `sys.duode.panels.active=1` |
 | device_phh_treble 0015 | PaneManager geometry fix |
 | DuoProbe (dev only) | probe HOME + test activities, logcat tag `DuoProbe` (`tools/duo-probe/README.md`) |
 
@@ -64,6 +66,14 @@ adb shell cmd package set-home-activity <recorded Quickstep component>          
 Probe HOME: area A = panel 0 (left), area B = panel 1 (right). Buttons: *Probe test*, *Probe test (new instance)*,
 *Probe locked (showWhenLocked)*, up to 8 apps; checkbox *Send launchDisplayId=0* reproduces the Quickstep option.
 
+**Two probe tasks.** *Probe test* always reuses its one task (NEW_TASK without MULTIPLE_TASK; the reusable-task
+lookup searches every task area), so tapping it on B moves the task from A. Whenever a step needs a probe on each
+panel, use *Probe test* on A and *Probe test (new instance)* on B (NEW_DOCUMENT | MULTIPLE_TASK, always a new task),
+and check that the two `task=` ids differ (`onResume` lines, or `activities.txt`) before continuing.
+
+The image also publishes `adb shell getprop sys.duode.panels.active` (1 when the two panel hierarchy was built this
+boot; Launcher3 uses it to stop requesting freeform).
+
 Evidence per gate (`G=g1` etc.); keep logcat running for the whole gate:
 
 ```bash
@@ -90,16 +100,21 @@ Panel bounds below are for the unrotated, unfolded Duo 1: P0 = `[0,0][1350,1800]
 
 ### G1 Launch/reuse
 
-1. Probe HOME, toggle off. For A then B: tap *Probe test* (launch), press Home on that panel, tap again (reuse);
-   repeat to 10 launches/reuses per side. Then tick *Send launchDisplayId=0* and repeat 10 per side. `snap` once per block.
-2. Launcher3 path: Quickstep HOME; tap Calendar (or Settings) from a workspace/hotseat icon on the left, then the right,
+1. Probe HOME, toggle off. Side A: tap *Probe test* (launch), press Home on A, tap again (reuse); repeat to 10
+   launches/reuses. Tap *Finish* in the probe test to end its task (do not force-stop the package: that also kills the
+   probe HOME), then do the same on side B. Then tick *Send launchDisplayId=0* and repeat 10 per side.
+   `snap` once per block.
+2. Cross-panel reuse: *Probe test* on A, Home on A, then tap *Probe test* on B, 5 times alternating. Expected: the same
+   `task=` id moves to the tapped panel (contract: a tap on a panel opens/reuses the app there). Record the result.
+3. Launcher3 path: Quickstep HOME; tap Calendar (or Settings) from a workspace/hotseat icon on the left, then the right,
    10 times each (Home between taps).
-3. Negative controls: `adb shell am start --display 0 -n org.duode.probe/.ProbeTestActivity` (not a home launch; must
-   keep the platform choice, the default area); panel-off reboot and repeat steps 1-2 once per side.
+4. Negative controls: `adb shell am start --display 0 -n org.duode.probe/.ProbeTestActivity` (not a home launch; must
+   keep the platform choice, the default area); panel-off reboot and repeat steps 1 and 3 once per side.
 
 Pass: every `launch side=A` is followed by `onResume` of a `ProbeTestActivity` whose `bounds` equal P0 (B: P1), with
-the task under `Panel0Tasks` / `Panel1Tasks` in `containers.txt`, `mode=fullscreen`, never `freeform`; reuse keeps the
-same `task=` id. Launcher3 launches land in the tapped panel, fullscreen in it (Launcher3 0008 + frameworks 0011).
+the task under `Panel0Tasks` / `Panel1Tasks` in `containers.txt`, `mode=fullscreen`, never `freeform`; reuse on the
+same side keeps the same `task=` id. Launcher3 launches land in the tapped panel, fullscreen in it (Launcher3 0008 +
+frameworks 0011).
 Panel-off: tasks in `DefaultTaskDisplayArea`; Launcher3 behaves as on the baseline (freeform preference unchanged).
 Record requested windowing mode (`launch ... windowingMode=`; for Launcher3 `activities.txt`) and final bounds.
 
@@ -111,7 +126,8 @@ is logged; no task keeps `mForceHiddenFlags=8` after it is relaunched; no `mForc
 
 ### G2 Independent Home
 
-Probe test on A and on B. Focus B (tap its editor), Home gesture on B. Repeat focusing A, Home on A. 10 each.
+Probe test on A and *Probe test (new instance)* on B (two distinct `task=` ids). Focus B (tap its editor), Home
+gesture on B. Repeat focusing A, Home on A. 10 each.
 
 Pass: only the focused panel's tasks are minimized (log names the right panel); the other panel's probe stays visible
 and takes input (tap its editor: `editorFocus` from that `act=`); no `onStop` for it. Record whether it stays `RESUMED`
@@ -119,7 +135,8 @@ and takes input (tap its editor: `editorFocus` from that `act=`); no `onStop` fo
 
 ### G3 Recents / All Apps
 
-Quickstep HOME, apps on both panels. Open Overview from each panel, select a task, then open and cancel. Open All Apps
+Quickstep HOME, two different apps, one per panel (Calendar left, Settings right; two distinct task ids). Open
+Overview from each panel, select a task, then open and cancel. Open All Apps
 on each panel. Repeat once with the probe HOME (Quickstep fallback Recents).
 
 Pass: Overview and All Apps are visible and interactive; select returns the task to the invoking panel; cancel returns
@@ -128,7 +145,8 @@ prototype result only; record it as such.
 
 ### G4 Back / focus
 
-Probe test on A and B. Focus B, then Back gesture from A's outer edge (x≈0). Repeat mirrored (from x≈2783), then from
+Probe test on A and *Probe test (new instance)* on B (two distinct `task=` ids). Focus B, then Back gesture from A's
+outer edge (x≈0). Repeat mirrored (from x≈2783), then from
 the hinge-side edges (x≈1349 on A, x≈1434 on B). Start a Back swipe and cancel it once per side.
 
 Pass: Back targets the panel the gesture started on (`onDestroy` / finish of that side's `act=` only), even when the
@@ -137,7 +155,10 @@ other was focused; cancel produces no lifecycle change; predictive animation sta
 
 ### G5 IME
 
-Probe test on A and B. Tap A's first editor, then A's second editor, then B's editor; rotate with the keyboard open.
+Probe test on A and *Probe test (new instance)* on B (two distinct `task=` ids). Tap A's first editor, then A's second
+editor, then B's editor; rotate with the keyboard open, and fold to one panel with the keyboard open (the probe is
+relaunched on configuration changes; repeat with an installed app that declares `configChanges` for orientation and
+screen size, so its window survives, to exercise frameworks 0015).
 
 Pass: `ImeContainer requested-bounds` in `containers.txt` equals the target panel (frameworks 0012); the target probe
 logs `event=insets ... imeVisible=true` and the other probe does not get IME insets; taps on the other panel reach it while the
@@ -145,7 +166,8 @@ keyboard is up; keys type into the focused editor; after rotation the keyboard i
 
 ### G6 Authentication safety (stop the gate on failure)
 
-Needs a screen lock (operator's choice). *Probe locked (showWhenLocked)* on A, Probe test on B. Lock
+Needs a screen lock (operator's choice). *Probe locked (showWhenLocked)* on A (its own task), Probe test on B; check
+the two `task=` ids differ. Lock
 (`adb shell input keyevent 26`), wake (`adb shell input keyevent 224`), `snap`, unlock. 10 cycles, then swap sides.
 
 Pass: keyguard covers both panels on every cycle; no ordinary (non-showWhenLocked) content of B is visible or touchable
@@ -154,7 +176,8 @@ stop, not an alpha limitation.
 
 ### G7 Physical posture
 
-Apps on both panels. Fold toward each side 10 times, unfold; rotate through 0/90/180/270 once in each posture.
+Probe test on A and *Probe test (new instance)* on B, plus Calendar from Launcher3 for the Launcher3 path (distinct
+task ids). Fold toward each side 10 times, unfold; rotate through 0/90/180/270 once in each posture.
 `adb shell dumpsys device_state | grep mCommittedState` and `snap` after each change.
 
 Pass: no task lost (same `task=` ids in `activities.txt`), no stranded `mForceHiddenFlags=8` (only tasks the user sent
