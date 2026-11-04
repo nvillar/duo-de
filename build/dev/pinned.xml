@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  DUO-DE developer manifest: build/default.xml with every moving branch pinned
+  to an exact commit. Used by dev/sync.sh together with build/remove.xml, on top
+  of the AOSP manifest android-16.0.0_r4. Release builds (build.sh) still use
+  build/default.xml.
+
+  Differences from build/default.xml:
+  - revision is a commit SHA; upstream records the branch it was resolved from.
+  - The GApps project (vendor/gapps, Azure remote) is omitted; the developer flow
+    builds only the vanilla variant. build/dev/pinned-gapps.xml adds it back.
+
+  Resolved with `git ls-remote` on 2026-11-04 (UTC).
+  These SHAs are NOT proven to be the inputs of release v2026.10.28
+  (e68f56779723acb06bfdf11d9bc470d06554c5ba). Every tip below has a committer
+  date before that release was created (2026-10-28T07:02Z), which is consistent
+  with, but not proof of, the release having used the same commits.
+
+  To refresh: run `git ls-remote https://github.com/<name> refs/heads/<upstream>`
+  for each project, update revision, and the date above.
+-->
+<manifest>
+  <remote name="github" fetch="https://github.com" />
+
+  <!-- TrebleDroid -->
+  <project path="device/phh/treble" name="TrebleDroid/device_phh_treble" remote="github" revision="ad694645eb591f00b3acced10b546397812435ec" upstream="android-16.0" />
+
+  <!-- ponces -->
+  <project path="packages/apps/ParanoidSense" name="Ethanol10/android_packages_apps_ParanoidSense" remote="github" revision="9ade12f91d85fa18d47b6e127ce46d43b05a80f6" upstream="beryl" />
+  <project path="packages/apps/QcRilAm" name="AndyCGYan/android_packages_apps_QcRilAm" remote="github" revision="dc599b67cc1e7e9a62ca15eef605e3b2546d0d42" upstream="master" />
+  <project path="packages/services/OmniJaws" name="crdroidandroid/android_packages_services_OmniJaws" remote="github" revision="fe3e95d465e7367402e60f7a582592ef5a79d23f" upstream="16.0-qpr1" />
+
+  <!-- duo specifics -->
+  <project path="packages/thain/rro_overlays" name="Archfx/duoOverlays" remote="github" revision="115ca10f4f20d1b2f390e9b39d1041a67a62c5d7" upstream="main" />
+  <project path="vendor/surface" name="Archfx/duoVendor" remote="github" revision="60a3e8f6caacda6a9bafdc7c59d202f66fd8c9c8" upstream="main" />
+  <project path="packages/thain/services/PostureProcessor" name="Archfx/duoPosture" remote="github" revision="365d92418660630b91ee825372d9fdafa6896c8b" upstream="main" />
+  <project path="treble_app" name="Archfx/duoTreble" remote="github" revision="7a901aef386837d197b71525beced4839ad4a7ee" upstream="master" />
+
+  <!-- AOSP prebuilts (already pinned in build/default.xml) -->
+  <project path="prebuilts/vndk/v28" name="platform/prebuilts/vndk/v28" remote="aosp" revision="204f1bad00aaf480ba33233f7b8c2ddaa03155dd" clone-depth="1" />
+  <project path="prebuilts/vndk/v29" name="platform/prebuilts/vndk/v29" remote="aosp" revision="bef5d37dda9360940964f097d612c8032e140961" clone-depth="1" />
+  <project path="prebuilts/vndk/v30" name="platform/prebuilts/vndk/v30" remote="aosp" revision="5f9884aa352825291757dfd6694b874ad8c1805e" clone-depth="1" />
+
+  <project path="treble_adapter" name="ponces/treble_adapter" remote="github" revision="d8d0eece896bd2b3957bdee893c5f46aa92b211f" upstream="master" />
+
+  <project path="vendor/hardware_overlay" name="TrebleDroid/vendor_hardware_overlay" remote="github" revision="bb0bbb9e1314e5312f718ca1d3ea320137d14370" upstream="pie" />
+  <project path="vendor/interfaces" name="TrebleDroid/vendor_interfaces" remote="github" revision="a2271d260e226e8de5cb1e8c15a229dc90c007dd" upstream="android-16.0" />
+  <project path="vendor/magisk" name="phhusson/vendor_magisk" remote="github" revision="d8056f8032a0f60f365ddfe5e9fccd7eaf3a655d" upstream="android-10.0" />
+  <project path="vendor/ponces" name="Ethanol10/vendor_ponces" remote="github" revision="5abba7dd063b1e227a7aed602cdfa8ecaeed31e2" upstream="android-16.0" />
+</manifest>

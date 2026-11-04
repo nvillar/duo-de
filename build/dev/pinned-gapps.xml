@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Optional add-on to build/dev/pinned.xml: the GApps vendor project from
+  build/default.xml, pinned. Installed only when dev/sync.sh is given its with-gapps option.
+  The developer build still builds the vanilla variant; this exists for
+  trees that need vendor/gapps present (for example to apply its patches).
+
+  Resolved with `git ls-remote` on 2026-11-04 (UTC); not proven to be the
+  v2026.10.28 release input.
+-->
+<manifest>
+  <remote name="azure" fetch="https://ponces26.visualstudio.com/DefaultCollection/vendor_gapps/_git" />
+
+  <project path="vendor/gapps" name="vendor_gapps" remote="azure" revision="d8cffdc74e18ae4909d94f7cf56bf7f140a02e62" upstream="android-16.0" clone-depth="1" />
+</manifest>
