@@ -15,6 +15,12 @@
 #   DUO_DEV_MEMORY       memory limit (--memory), e.g. 48g (default: none; WSL's
 #                        .wslconfig limit applies)
 #   DUO_DEV_PODMAN_ARGS  extra `podman run` arguments (word-split)
+#   DUO_DEV_CGROUP_MANAGER  Podman --cgroup-manager (default cgroupfs; "default"
+#                        leaves Podman's own setting). Under WSL2, rootless
+#                        Podman's systemd manager fails with "sd-bus call:
+#                        Permission denied" when there is no user session.
+#   DUO_DEV_EVENTS_BACKEND  Podman --events-backend (default file; "default"
+#                        leaves Podman's own setting)
 #   Resource limits need a cgroup v2 host with delegated controllers; on other
 #   hosts Podman may ignore them with a warning or refuse to start.
 #
@@ -30,17 +36,23 @@ IMAGE="${DUO_DEV_IMAGE:-localhost/duo-de-build:22.04}"
 HARNESS="$(duo_harness_root)"
 CONTAINERFILE="$HARNESS/dev/Containerfile"
 
-usage() { sed -n '2,23p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,29p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 
 duo_require_cmds podman
+# Global options go before the subcommand (supported by Podman 3.4).
+PODMAN=(podman)
+CGROUP_MANAGER="${DUO_DEV_CGROUP_MANAGER:-cgroupfs}"
+EVENTS_BACKEND="${DUO_DEV_EVENTS_BACKEND:-file}"
+[ "$CGROUP_MANAGER" == default ] || PODMAN+=("--cgroup-manager=$CGROUP_MANAGER")
+[ "$EVENTS_BACKEND" == default ] || PODMAN+=("--events-backend=$EVENTS_BACKEND")
 cmd="${1:-}"
 [ $# -gt 0 ] && shift
 
 case "$cmd" in
     image)
         log "Building $IMAGE from dev/Containerfile"
-        podman build --pull -t "$IMAGE" -f "$CONTAINERFILE" "$HARNESS/dev"
-        podman image inspect --format 'Image id: {{.Id}}' "$IMAGE"
+        "${PODMAN[@]}" build --pull -t "$IMAGE" -f "$CONTAINERFILE" "$HARNESS/dev"
+        "${PODMAN[@]}" image inspect --format 'Image id: {{.Id}}' "$IMAGE"
         exit 0
         ;;
     sync|build|shell) ;;
@@ -53,8 +65,8 @@ mkdir -p -- "$1"
 TREE="$(duo_tree_path "$1")"
 shift
 
-podman image exists "$IMAGE" || die "image $IMAGE not found; run: dev/podman.sh image"
-IMAGE_ID="$(podman image inspect --format '{{.Id}}' "$IMAGE")"
+"${PODMAN[@]}" image exists "$IMAGE" || die "image $IMAGE not found; run: dev/podman.sh image"
+IMAGE_ID="$("${PODMAN[@]}" image inspect --format '{{.Id}}' "$IMAGE")"
 
 CPUS="${DUO_DEV_CPUS:-$(duo_jobs_default)}"
 [[ "$CPUS" =~ ^[1-9][0-9]*$ ]] || die "DUO_DEV_CPUS must be a positive integer"
@@ -76,7 +88,10 @@ run_args=(
     -e DUO_DEV_CONTAINERFILE_SHA256="$(sha256sum "$CONTAINERFILE" | cut -d' ' -f1)"
 )
 [ -z "${DUO_DEV_CPUS:-}" ] || run_args+=(--cpus="$CPUS")
-[ -z "${DUO_DEV_MEMORY:-}" ] || run_args+=(--memory="$DUO_DEV_MEMORY")
+if [ -n "${DUO_DEV_MEMORY:-}" ]; then
+    run_args+=(--memory="$DUO_DEV_MEMORY")
+    [ "$CGROUP_MANAGER" != cgroupfs ] || warn "rootless Podman with cgroupfs may ignore or reject --memory; see docs/development-setup.md"
+fi
 if [ -t 0 ] && [ -t 1 ]; then run_args+=(-it); fi
 
 # A separate artifacts directory has to be mounted too.
@@ -94,7 +109,7 @@ done
 [ -z "${DUO_DEV_PODMAN_ARGS:-}" ] || run_args+=(${DUO_DEV_PODMAN_ARGS})
 
 case "$cmd" in
-    sync)  exec podman run "${run_args[@]}" "$IMAGE" bash "$HARNESS/dev/sync.sh" "${args[@]}" "$TREE" ;;
-    build) exec podman run "${run_args[@]}" "$IMAGE" bash "$HARNESS/dev/build.sh" --jobs "$CPUS" "${args[@]}" "$TREE" ;;
-    shell) exec podman run "${run_args[@]}" "$IMAGE" bash ;;
+    sync)  exec "${PODMAN[@]}" run "${run_args[@]}" "$IMAGE" bash "$HARNESS/dev/sync.sh" "${args[@]}" "$TREE" ;;
+    build) exec "${PODMAN[@]}" run "${run_args[@]}" "$IMAGE" bash "$HARNESS/dev/build.sh" --jobs "$CPUS" "${args[@]}" "$TREE" ;;
+    shell) exec "${PODMAN[@]}" run "${run_args[@]}" "$IMAGE" bash ;;
 esac
