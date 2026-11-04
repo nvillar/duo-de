@@ -91,6 +91,20 @@ grep "^$(id -un):" /etc/subuid   # rootless Podman needs a subordinate UID range
 
 Ubuntu 22.04 ships Podman 3.4; the scripts are written for it. Docker is not needed.
 
+Rootless Podman under WSL2 needs two adjustments, otherwise the first `RUN` step of an image build fails with `crun: ... sd-bus call: Permission denied` (Podman's systemd cgroup manager has no usable user session):
+
+```bash
+sudo loginctl enable-linger "$(id -un)"
+mkdir -p ~/.config/containers
+cat > ~/.config/containers/containers.conf <<'EOF'
+[engine]
+cgroup_manager = "cgroupfs"
+events_logger = "file"
+EOF
+```
+
+`dev/podman.sh` also passes `--cgroup-manager=cgroupfs --events-backend=file` itself, so it works without the file; set `DUO_DEV_CGROUP_MANAGER=default` and `DUO_DEV_EVENTS_BACKEND=default` to use Podman's own settings instead. With `cgroupfs`, rootless Podman may ignore or reject resource limits such as `DUO_DEV_MEMORY`; rely on the `.wslconfig` limits instead.
+
 ### 4.3 Harness checkout
 
 Clone your fork inside the distribution, next to (not inside) the Android tree:
@@ -104,19 +118,21 @@ git config user.email "<id>+<github-user>@users.noreply.github.com"
 
 The developer scripts live in `dev/`; `build/dev/pinned.xml` is the pinned developer manifest.
 
-### 4.4 Build container *(not yet validated)*
+### 4.4 Build container
 
 ```bash
 ~/duo-de/dev/podman.sh image
 ```
 
-This builds `localhost/duo-de-build:22.04` from `dev/Containerfile` (Ubuntu 22.04, OpenJDK 17, repo and git-lfs from the Ubuntu archive). Re-run it to pick up base-image updates; the image id is recorded in each build's provenance.
+This builds `localhost/duo-de-build:22.04` from `dev/Containerfile` (Ubuntu 22.04, OpenJDK 17, repo and git-lfs from the Ubuntu archive): about 1.4 GB, about 90 s. Re-run it to pick up base-image updates; the image id is recorded in each build's provenance.
+
+The image's `repo` launcher (Ubuntu's, 2.17) is older than the one `repo init` places in the tree. The scripts run the tree's own launcher (`.repo/repo/repo`) when it exists; with the system launcher, repo only prints a harmless version warning.
 
 ## 5. Developer build
 
 The developer flow builds only the vanilla `treble_arm64_bvN-bp2a-userdebug` system image. It never uploads, never uses the upstream release keys, and only writes inside the Android tree and the artifacts directory.
 
-### 5.1 Sync the source *(not yet validated)*
+### 5.1 Sync the source
 
 ```bash
 ~/duo-de/dev/podman.sh sync ~/aosp      # or, on the host: ~/duo-de/dev/sync.sh ~/aosp
@@ -134,7 +150,15 @@ android.googlesource.com rate-limits heavy clients with **HTTP 429**; a first sy
 
 The pinned manifest omits the GApps project. Add `--with-gapps` to include `vendor/gapps` (also pinned).
 
-### 5.2 Build *(not yet validated)*
+**Shallow checkouts and patches.** A `--depth=1` tree is fine for building, but not for the projects that receive DUO-DE patches: `git am -3` needs the blobs each patch was made against, and fails with `sha1 information is lacking or useless ... could not build fake ancestor` when they are missing. `dev/build.sh` checks every patched project (about 37) before applying patches and stops with a list if any is shallow. Run it once with `--unshallow` to fetch their full history (from the project's own remote, under the tree lock, with retries and growing pauses for HTTP 429):
+
+```bash
+~/duo-de/dev/podman.sh build ~/aosp --unshallow --patch-only
+```
+
+This downloads the history of those projects only, which includes large ones such as `frameworks/base` and `frameworks/av`: expect several GB more disk and tens of minutes, depending on bandwidth and rate limiting. Later builds do not need the option. Unshallowing gives `git am -3` the history it needs; a patch whose base is not in the project's history still fails, and must be rebased.
+
+### 5.2 Build *(not yet validated end to end)*
 
 ```bash
 ~/duo-de/dev/podman.sh build ~/aosp
@@ -168,6 +192,7 @@ Useful options (`dev/build.sh --help`):
 | `--ota-url URL` | updater feed to bake in (https only; Archfx URLs are refused) |
 | `--reset-patches` | abort a stuck `git am`, force patched projects back to their manifest revision (discarding tracked changes in them) and re-apply all patches |
 | `--patch-only` | apply patches and generate makefiles, then stop |
+| `--unshallow` | fetch full history for shallow patched projects before applying patches |
 | `--skip-treble-app` | keep the TrebleApp already in `vendor/hardware_overlay` |
 | `--no-installclean` | skip `make installclean` for faster incremental builds |
 | `--artifacts-dir DIR` | write results elsewhere |
