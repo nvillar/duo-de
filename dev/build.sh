@@ -158,6 +158,8 @@ am_in_progress() { (cd -- "$1" && [ -d "$(git rev-parse --git-path rebase-apply)
 
 state_get() { [ -f "$STATE_FILE" ] && awk -v k="$1" '$1 == k { print $2; exit }' "$STATE_FILE"; }
 state_head() { [ -f "$STATE_FILE" ] && awk -v p="$1" '$1 == "project" && $2 == p { print $4; exit }' "$STATE_FILE"; }
+# Manifest revision the project's patches were applied on top of.
+state_base() { [ -f "$STATE_FILE" ] && awk -v p="$1" '$1 == "project" && $2 == p { print $3; exit }' "$STATE_FILE"; }
 
 apply_patches() {
     local want p head base rec
@@ -171,7 +173,11 @@ apply_patches() {
         && [ "$(state_get gapps || true)" == "$GAPPS_PRESENT" ]; then
         local intact=true
         for p in "${PROJECT_PATHS[@]}"; do
-            if am_in_progress "$p" || [ "$(proj_head "$p")" != "$(state_head "$p" || true)" ]; then
+            # A network-only sync can move refs/remotes/m/* without a checkout;
+            # then the recorded patches sit on an outdated base: re-apply.
+            if am_in_progress "$p" \
+                || [ "$(proj_head "$p")" != "$(state_head "$p" || true)" ] \
+                || [ "$(proj_base "$p" 2>/dev/null || true)" != "$(state_base "$p" || true)" ]; then
                 intact=false; break
             fi
         done
@@ -240,6 +246,22 @@ else
     apply_patches
 fi
 
+# Pinned DUO-DE source projects (build/dev/pinned.xml) and the full set of
+# projects whose state is monitored: patched ones plus pinned ones present.
+declare -A PINS=()
+declare -a PIN_PATHS=() WATCH_PATHS=("${PROJECT_PATHS[@]}")
+while read -r p pin; do
+    PINS[$p]="$pin"
+    PIN_PATHS+=("$p")
+    if [ -d "$p" ] && [ -z "${SEEN[$p]:-}" ]; then WATCH_PATHS+=("$p"); fi
+done < <(python3 - "$HARNESS/build/dev/pinned.xml" <<'PY'
+import sys
+import xml.etree.ElementTree as ET
+for p in ET.parse(sys.argv[1]).getroot().iter("project"):
+    print(p.get("path"), p.get("revision"))
+PY
+)
+
 # ---------------------------------------------------------------- makefiles
 
 # Same content as build/aosp.mk (which build.sh copies over device/phh/treble/aosp.mk),
@@ -295,22 +317,37 @@ if ! $SKIP_TREBLE_APP; then
 fi
 TREBLE_APP_SHA256="$(sha256sum vendor/hardware_overlay/TrebleApp/app.apk | cut -d' ' -f1)"
 
-# State of every patched project (HEAD + hash of tracked changes), the TrebleApp
-# prebuilt and the local manifests. Taken before the build and compared again
-# before collecting artifacts, so provenance always describes the built tree.
+# State of every watched project (HEAD, tracked changes, and name/size/mtime of
+# untracked files that are not ignored), the generated product makefiles, the
+# TrebleApp prebuilt and the local manifests. Ignored files (build outputs) are
+# not included. Taken before the build and compared again before collecting
+# artifacts, so provenance always describes the built tree.
+GEN_MAKEFILES_GLOB=(device/phh/treble/duo-dev.mk device/phh/treble/AndroidProducts.mk device/phh/treble/treble_*.mk)
+untracked_state() {
+    git -C "$1" ls-files -z --others --exclude-standard \
+        | (cd -- "$1" && xargs -0r stat -c '%n %s %Y') | sha256sum | cut -d' ' -f1
+}
 tree_snapshot() {
     local p
-    for p in "${PROJECT_PATHS[@]}"; do
-        printf 'project %s %s %s\n' "$p" "$(proj_head "$p")" \
-            "$(git -C "$p" diff HEAD --no-ext-diff --binary | sha256sum | cut -d' ' -f1)"
+    for p in "${WATCH_PATHS[@]}"; do
+        printf 'project %s %s %s %s\n' "$p" "$(proj_head "$p")" \
+            "$(git -C "$p" diff HEAD --no-ext-diff --binary | sha256sum | cut -d' ' -f1)" \
+            "$(untracked_state "$p")"
     done
+    # shellcheck disable=SC2068
+    sha256sum ${GEN_MAKEFILES_GLOB[@]} | sed 's/^/makefile /'
     printf 'trebleapp %s\n' "$(sha256sum vendor/hardware_overlay/TrebleApp/app.apk | cut -d' ' -f1)"
     printf 'local_manifests %s\n' "$(cat .repo/local_manifests/*.xml 2>/dev/null | sha256sum | cut -d' ' -f1)"
 }
+# Projects with local changes, ignoring the files this script manages itself.
 dirty_projects() {
     local p out=()
-    for p in "${PROJECT_PATHS[@]}"; do
-        git -C "$p" diff HEAD --quiet --no-ext-diff || out+=("$p")
+    local managed=(':(exclude)duo-dev.mk' ':(exclude)TrebleApp/app.apk' ':(exclude)TrebleApp.apk')
+    for p in "${WATCH_PATHS[@]}"; do
+        if ! git -C "$p" diff HEAD --quiet --no-ext-diff -- . "${managed[@]}" \
+            || [ -n "$(git -C "$p" ls-files --others --exclude-standard -- . "${managed[@]}")" ]; then
+            out+=("$p")
+        fi
     done
     echo "${out[*]:-none}"
 }
@@ -399,30 +436,40 @@ repo manifest -r -o "$ART/manifest.xml"
 (cd -- "$ART" && sha256sum -- "$IMG_NAME" > "$IMG_NAME.sha256")
 IMG_SHA256="$(cut -d' ' -f1 "$ART/$IMG_NAME.sha256")"
 
-# Do the pre-patch bases (manifest revisions) match build/dev/pinned.xml?
-# manifest.xml records post-patch HEADs, so it cannot be compared directly.
+# Does the built source match build/dev/pinned.xml?
+# - patched projects: the base recorded when the patches were applied;
+# - other projects: the checked-out HEAD.
+# The live refs/remotes/m/* ref is only reported: repo updates it on fetch,
+# before (or without) a checkout. manifest.xml records post-patch HEADs.
 bad_pins=()
 {
-    echo "# path pinned_revision base_revision(pre-patch) head(built)"
-    while read -r p pin; do
-        if [ -d "$p" ]; then
-            base="$(proj_base "$p" 2>/dev/null)" || base=unknown
-            head="$(proj_head "$p" 2>/dev/null)" || head=unknown
+    echo "# path kind pinned checked(compared) live_m_ref head(built)"
+    for p in "${PIN_PATHS[@]}"; do
+        pin="${PINS[$p]}"
+        if [ ! -d "$p" ]; then
+            kind=missing; checked=missing; live=missing; head=missing
         else
-            base=missing; head=missing
+            head="$(proj_head "$p" 2>/dev/null)" || head=unknown
+            live="$(proj_base "$p" 2>/dev/null)" || live=unknown
+            if [ -n "${SEEN[$p]:-}" ]; then
+                kind=patched
+                if [ "$head" == "$(state_head "$p" || true)" ]; then
+                    checked="$(state_base "$p" || true)"
+                else
+                    checked=unknown   # --skip-patches with a tree not matching patch-state
+                fi
+                [ -n "$checked" ] || checked=unknown
+            else
+                kind=unpatched
+                checked="$head"
+            fi
         fi
-        [ "$base" == "$pin" ] || bad_pins+=("$p")
-        echo "$p $pin $base $head"
-    done < <(python3 - "$HARNESS/build/dev/pinned.xml" <<'PY'
-import sys
-import xml.etree.ElementTree as ET
-for p in ET.parse(sys.argv[1]).getroot().iter("project"):
-    print(p.get("path"), p.get("revision"))
-PY
-)
+        [ "$checked" == "$pin" ] || bad_pins+=("$p")
+        echo "$p $kind $pin $checked $live $head"
+    done
 } > "$ART/pinned-bases.txt"
 if [ ${#bad_pins[@]} -eq 0 ]; then
-    PIN_CHECK="match (pre-patch bases equal build/dev/pinned.xml)"
+    PIN_CHECK="match (patched bases and unpatched HEADs equal build/dev/pinned.xml)"
 else
     PIN_CHECK="MISMATCH (${#bad_pins[@]} projects): ${bad_pins[*]}"
     warn "tree bases differ from build/dev/pinned.xml: $PIN_CHECK"
@@ -454,7 +501,7 @@ patchset_sha256: $(state_get patchset || echo unknown)
 gapps_project_present: $GAPPS_PRESENT
 treble_app: $TREBLE_APP_STATUS
 treble_app_apk_sha256: $TREBLE_APP_SHA256
-patched_projects_with_uncommitted_changes: $DIRTY_PROJECTS
+projects_with_uncommitted_changes: $DIRTY_PROJECTS
 tree_unchanged_during_build: verified
 
 aosp_manifest_branch: $(git config --file .repo/manifests.git/config --get branch.default.merge || echo unknown)
