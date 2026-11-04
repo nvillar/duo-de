@@ -87,3 +87,37 @@ if run 2>"$T/shallow.err"; then echo "FAIL shallow patched project accepted"; el
 run --unshallow >/dev/null 2>&1 && echo "PASS --unshallow applies patches"
 [ "$(git -C "$T/tree/system/core" rev-parse --is-shallow-repository)" == false ] && echo "PASS project unshallowed"
 git -C "$T/tree/system/core" log --format=%s | tr '\n' ' ' | grep -q "core1 two one" && echo "PASS full history and patch present"
+# Regression (baseline run): a patch base reachable only from an earlier release tag.
+S="$T/src/extras"; mkdir -p "$S"; git -C "$S" init -q -b main
+echo root > "$S/file.txt"; git -C "$S" add -A; git -C "$S" commit -qm root
+git -C "$S" checkout -q -b r2
+seq 1 9 > "$S/other.txt"; git -C "$S" add -A; git -C "$S" commit -qm "r2 other"; git -C "$S" tag android-16.0.0_r2
+sed -i 's/^5$/FIVE/' "$S/other.txt"; git -C "$S" commit -qam extras1
+mkdir -p "$H/patches/duo/platform_system_extras"
+git -C "$S" format-patch -q -1 --stdout > "$H/patches/duo/platform_system_extras/0001-extras1.patch"
+git -C "$S" checkout -q main; seq 1 9 | sed 's/^8$/EIGHT/' > "$S/other.txt"; git -C "$S" add -A; git -C "$S" commit -qm "r4 other"
+git clone -q --no-tags --single-branch --branch main -o aosp "file://$S" "$T/tree/system/extras"
+git -C "$T/tree/system/extras" update-ref refs/remotes/m/android-16.0.0_r4 HEAD
+git -C "$T/tree/system/extras" -c advice.detachedHead=false checkout -q --detach
+git -C "$H" add -A; git -C "$H" commit -qm "extras patch"
+if run >"$T/tags.out" 2>&1; then echo "FAIL patch needing a base tag applied without it"; else
+    grep -q "lack the android-16.0.0_r\* base tags" "$T/tags.out" && echo "PASS missing base tags warned, apply fails"; fi
+run --reset-patches --unshallow >/dev/null 2>&1 && echo "PASS --unshallow fetches base tags and applies"
+git -C "$T/tree/system/extras" rev-parse -q --verify refs/tags/android-16.0.0_r2 >/dev/null && echo "PASS android-16.0.0_r2 tag fetched"
+grep -qx system/extras "$T/tree/.duo-dev/base-tags-fetched" && ! grep -q system/core "$T/tree/.duo-dev/base-tags-fetched" \
+    && echo "PASS tags fetched only for aosp-remote projects"
+
+# dev/check-apply.sh: full series on a clean tree, all failures reported.
+CA="$H/dev/check-apply.sh"
+bash "$CA" --restore "$T/tree" >"$T/ca.out" 2>&1 && grep -q "All patches apply" "$T/ca.out" && echo "PASS check-apply clean series"
+[ "$(git -C "$T/tree/frameworks/base" rev-parse HEAD)" == "$(git -C "$T/tree/frameworks/base" rev-parse refs/remotes/m/android-16.0.0_r4)" ] && echo "PASS check-apply --restore returns to base"
+for f in "$H/patches/trebledroid/platform_frameworks_base/"*.patch "$H/patches/personal/platform_build/"*.patch; do
+    sed -i 's/^ base$/ nope/; s/^index .*/index 0000000..1111111 100644/' "$f"
+done
+if bash "$CA" "$T/tree" >"$T/ca.out" 2>&1; then echo "FAIL check-apply accepted broken series"; else
+    grep -q "failed: 2, skipped after a failure: 1" "$T/ca.out" && grep -q "trebledroid/platform_frameworks_base" "$T/ca.out" \
+        && grep -q "personal/platform_build" "$T/ca.out" && echo "PASS check-apply reports every failing project" || cat "$T/ca.out"
+fi
+git -C "$T/tree/device/phh/treble" log --format=%s | grep -q duo2 && echo "PASS check-apply continues with other projects"
+git -C "$H" checkout -q -- patches
+bash "$CA" --restore "$T/tree" >/dev/null 2>&1; run >/dev/null 2>&1
