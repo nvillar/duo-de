@@ -41,16 +41,13 @@
             </intent-filter>
         </activity>
 
-        <!-- An ordinary app activity (no configChanges: it is relaunched like a normal app). -->
+        <!-- An ordinary app activity (no configChanges: it is relaunched like a normal app). No LAUNCHER intent filter,
+             so it does not appear in other launchers; the probe home starts it with an explicit ACTION_MAIN +
+             CATEGORY_LAUNCHER intent (ProbeIntents), which needs no matching filter. Exported for `am start`. -->
         <activity
             android:name=".ProbeTestActivity"
             android:label="Duo probe test"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
-        </activity>
+            android:exported="true" />
 
         <!-- Keyguard gate: the same test activity, shown over the lock screen, in its own task. -->
         <activity
@@ -58,11 +55,6 @@
             android:label="Duo probe locked"
             android:exported="true"
             android:showWhenLocked="true"
-            android:taskAffinity="org.duode.probe.locked">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
-        </activity>
+            android:taskAffinity="org.duode.probe.locked" />
     </application>
 </manifest>

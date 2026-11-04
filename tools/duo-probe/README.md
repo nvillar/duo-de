@@ -10,7 +10,7 @@ small compile errors on the first `m DuoProbe`.
 
 | Component | Purpose |
 |---|---|
-| `ProbeHomeActivity` | A HOME-category activity (so the framework treats launches from it as launches from home). Two large launch areas, one per panel (laid out around the hinge band; A = left/top, B = right/bottom), each listing the probe activities and up to 8 launchable apps. A tap starts the app with `FLAG_ACTIVITY_NEW_TASK \| FLAG_ACTIVITY_RESET_TASK_IF_NEEDED`, `Intent.setSourceBounds(<on-screen rect of the tapped button>)`, `ActivityOptions.makeBasic()` and **no launch display id and no windowing mode**, which is what a fixed Launcher3 should send. The *Send launchDisplayId=0* toggle adds `setLaunchDisplayId(0)` to reproduce the Quickstep bypass. Back on the probe home is consumed and logged. |
+| `ProbeHomeActivity` | A HOME-category activity (so the framework treats launches from it as launches from home). Two large launch areas, one per panel (laid out around the hinge band; A = left/top, B = right/bottom), each listing the probe activities and up to 8 launchable apps. Every tap, including the probe's own test activities, starts an `ACTION_MAIN` + `CATEGORY_LAUNCHER` intent with an explicit component (`ProbeIntents`; the panel routing in frameworks_base 0008 `panelForLaunch` ignores anything else) with `FLAG_ACTIVITY_NEW_TASK \| FLAG_ACTIVITY_RESET_TASK_IF_NEEDED`, `Intent.setSourceBounds(<on-screen rect of the tapped button>)`, `ActivityOptions.makeBasic()` and **no launch display id and no windowing mode**, which is what a fixed Launcher3 should send. A non-LAUNCHER intent is refused and logged as `launchFailed reason=notLauncherIntent`. The *Send launchDisplayId=0* toggle adds `setLaunchDisplayId(0)` to reproduce the Quickstep bypass. Back on the probe home is consumed and logged. |
 | `ProbeTestActivity` | An ordinary app window (no `configChanges`, so it is relaunched like a normal app): two editors (IME gate, switching editor focus), *Show/Hide IME*, a requested-orientation cycle button (unspecified, portrait, landscape), *Launch another test task adjacent* (`FLAG_ACTIVITY_LAUNCH_ADJACENT \| NEW_TASK \| MULTIPLE_TASK`), *Log state now*, *Finish*. |
 | `ProbeLockedTestActivity` | The same window with `android:showWhenLocked="true"`, in its own task (keyguard gate). |
 | `ProbeActivity` / `ProbeLog` / `ExtensionsProbe` | Logging shared by all three. |
@@ -94,5 +94,7 @@ adb shell cmd package set-home-activity <recorded component>
 adb uninstall org.duode.probe
 ```
 
-The test activities are also launchable from any launcher ("Duo probe test", "Duo probe locked"), which exercises
-the real Launcher3/Quickstep launch path for comparison.
+The test activities have no LAUNCHER intent filter, so they do not appear in other launchers (the probe starts them
+with explicit ACTION_MAIN + CATEGORY_LAUNCHER intents, which need no filter). To compare against the real
+Launcher3/Quickstep launch path, launch an installed app such as Calendar from Launcher3, or start a probe activity
+directly with `adb shell am start -n org.duode.probe/.ProbeTestActivity` (not a home launch, so not panel-routed).
