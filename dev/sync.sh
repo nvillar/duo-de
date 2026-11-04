@@ -5,7 +5,10 @@
 # Usage: dev/sync.sh [options] <aosp-tree>
 #
 #   --depth N        clone depth for a new `repo init` (default 1; 0 = full history)
-#   --jobs N         parallel sync jobs (default: nproc)
+#   --jobs N         parallel fetch jobs (default 4; android.googlesource.com
+#                    answers HTTP 429 when a client fetches too much at once)
+#   --attempts N     whole-sync attempts, with growing pauses (default 4)
+#   --retry-fetches N  per-project fetch retries inside repo sync (default 5)
 #   --with-gapps     also install build/dev/pinned-gapps.xml (vendor/gapps)
 #   --no-sync        only install the local manifests, do not run `repo sync`
 #
@@ -13,23 +16,28 @@
 # to .repo/local_manifests.disabled/, not deleted. No `git clean`, no reset.
 # Projects carrying DUO-DE patch commits are moved back to their manifest
 # revision by `repo sync`; dev/build.sh re-applies the patches afterwards.
+# Holds the same tree lock as dev/build.sh, so it never runs during a build.
 
 set -euo pipefail
 # shellcheck source=dev/lib.sh
 source "$(dirname -- "${BASH_SOURCE[0]}")/lib.sh"
 
 DEPTH=1
-JOBS="$(duo_jobs_default)"
+JOBS=4
+ATTEMPTS=4
+RETRY_FETCHES=5
 WITH_GAPPS=false
 DO_SYNC=true
 TREE_ARG=""
 
-usage() { sed -n '2,16p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,19p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --depth) DEPTH="${2:?--depth needs a value}"; shift 2 ;;
         --jobs) JOBS="${2:?--jobs needs a value}"; shift 2 ;;
+        --attempts) ATTEMPTS="${2:?--attempts needs a value}"; shift 2 ;;
+        --retry-fetches) RETRY_FETCHES="${2:?--retry-fetches needs a value}"; shift 2 ;;
         --with-gapps) WITH_GAPPS=true; shift ;;
         --no-sync) DO_SYNC=false; shift ;;
         -h|--help) usage; exit 0 ;;
@@ -40,12 +48,19 @@ done
 [ -n "$TREE_ARG" ] || { usage; exit 2; }
 [[ "$DEPTH" =~ ^[0-9]+$ ]] || die "--depth must be a number"
 [[ "$JOBS" =~ ^[1-9][0-9]*$ ]] || die "--jobs must be a positive number"
+[[ "$ATTEMPTS" =~ ^[1-9][0-9]*$ ]] || die "--attempts must be a positive number"
+[[ "$RETRY_FETCHES" =~ ^[0-9]+$ ]] || die "--retry-fetches must be a number"
 
-duo_require_cmds repo git git-lfs python3
+duo_require_cmds repo git git-lfs python3 flock
 HARNESS="$(duo_harness_root)"
 mkdir -p -- "$TREE_ARG"
 TREE="$(duo_tree_path "$TREE_ARG")"
 cd -- "$TREE"
+
+# Same exclusive lock as dev/build.sh, held until exit.
+mkdir -p .duo-dev
+exec 9>.duo-dev/lock
+flock -n 9 || die "a dev/build.sh or dev/sync.sh is running on $TREE; not touching it"
 
 if [ ! -d .repo/manifests ]; then
     log "Initializing $TREE at $DUO_AOSP_BRANCH"
@@ -98,12 +113,16 @@ if [ -d vendor/hardware_overlay/.git ] || [ -f vendor/hardware_overlay/.git ]; t
     fi
 fi
 
-sync_args=(-c --no-clone-bundle --no-tags "-j$JOBS")
-log "Syncing (repo sync ${sync_args[*]})"
-if ! repo sync "${sync_args[@]}"; then
-    warn "repo sync failed; retrying once"
-    repo sync "${sync_args[@]}"
-fi
+sync_args=(-c --no-clone-bundle --no-tags "-j$JOBS" "--retry-fetches=$RETRY_FETCHES")
+pause=60
+for ((attempt = 1; ; attempt++)); do
+    log "Syncing, attempt $attempt/$ATTEMPTS (repo sync ${sync_args[*]})"
+    repo sync "${sync_args[@]}" && break
+    [ "$attempt" -lt "$ATTEMPTS" ] || die "repo sync failed $ATTEMPTS times; on HTTP 429 wait and rerun with fewer --jobs"
+    warn "repo sync failed (HTTP 429 rate limiting is common); retrying in ${pause}s"
+    sleep "$pause"
+    pause=$((pause * 2))
+done
 
 mkdir -p .duo-dev
 repo manifest -r -o .duo-dev/synced-manifest.xml

@@ -74,7 +74,7 @@ STATE_DIR="$TREE/.duo-dev"
 STATE_FILE="$STATE_DIR/patch-state"
 mkdir -p "$STATE_DIR"
 exec 9>"$STATE_DIR/lock"
-flock -n 9 || die "another dev/build.sh is running on $TREE"
+flock -n 9 || die "a dev/build.sh or dev/sync.sh is running on $TREE"
 
 cd -- "$TREE"
 
@@ -165,7 +165,10 @@ apply_patches() {
     prepare_patch_root
     want="$(patchset_hash)"
 
-    if [ "$(state_get patchset || true)" == "$want" ] && [ "$(state_get gapps || true)" == "$GAPPS_PRESENT" ]; then
+    # The fast path never applies to an explicit reset.
+    if ! $RESET_PATCHES \
+        && [ "$(state_get patchset || true)" == "$want" ] \
+        && [ "$(state_get gapps || true)" == "$GAPPS_PRESENT" ]; then
         local intact=true
         for p in "${PROJECT_PATHS[@]}"; do
             if am_in_progress "$p" || [ "$(proj_head "$p")" != "$(state_head "$p" || true)" ]; then
@@ -232,6 +235,7 @@ apply_patches() {
 PATCH_STATUS="skipped (--skip-patches; tree used as is)"
 if $SKIP_PATCHES; then
     warn "--skip-patches: not checking or applying patches"
+    prepare_patch_root   # only to know which projects to watch
 else
     apply_patches
 fi
@@ -291,6 +295,29 @@ if ! $SKIP_TREBLE_APP; then
 fi
 TREBLE_APP_SHA256="$(sha256sum vendor/hardware_overlay/TrebleApp/app.apk | cut -d' ' -f1)"
 
+# State of every patched project (HEAD + hash of tracked changes), the TrebleApp
+# prebuilt and the local manifests. Taken before the build and compared again
+# before collecting artifacts, so provenance always describes the built tree.
+tree_snapshot() {
+    local p
+    for p in "${PROJECT_PATHS[@]}"; do
+        printf 'project %s %s %s\n' "$p" "$(proj_head "$p")" \
+            "$(git -C "$p" diff HEAD --no-ext-diff --binary | sha256sum | cut -d' ' -f1)"
+    done
+    printf 'trebleapp %s\n' "$(sha256sum vendor/hardware_overlay/TrebleApp/app.apk | cut -d' ' -f1)"
+    printf 'local_manifests %s\n' "$(cat .repo/local_manifests/*.xml 2>/dev/null | sha256sum | cut -d' ' -f1)"
+}
+dirty_projects() {
+    local p out=()
+    for p in "${PROJECT_PATHS[@]}"; do
+        git -C "$p" diff HEAD --quiet --no-ext-diff || out+=("$p")
+    done
+    echo "${out[*]:-none}"
+}
+TREE_SNAPSHOT_BEFORE="$(tree_snapshot)"
+DIRTY_PROJECTS="$(dirty_projects)"
+[ "$DIRTY_PROJECTS" == none ] || warn "building with uncommitted changes in: $DIRTY_PROJECTS"
+
 # ---------------------------------------------------------------- build
 
 export BUILD_NUMBER="$BUILD_TAG"
@@ -345,6 +372,19 @@ if grep -qi archfx "${PROP_FILES[0]}"; then
     die "system build.prop still references Archfx"
 fi
 
+# The tree must not have changed while building (e.g. a concurrent sync).
+TREE_SNAPSHOT_AFTER="$(tree_snapshot)"
+if [ "$TREE_SNAPSHOT_AFTER" != "$TREE_SNAPSHOT_BEFORE" ]; then
+    diff <(echo "$TREE_SNAPSHOT_BEFORE") <(echo "$TREE_SNAPSHOT_AFTER") >&2 || true
+    die "the tree changed during the build; not writing artifacts. Rebuild."
+fi
+if ! $SKIP_PATCHES; then
+    for p in "${PROJECT_PATHS[@]}"; do
+        [ "$(proj_head "$p")" == "$(state_head "$p" || true)" ] \
+            || die "$p is no longer at its recorded patched HEAD; not writing artifacts. Rebuild."
+    done
+fi
+
 # ---------------------------------------------------------------- artifacts
 
 ART="$ARTIFACTS_DIR/$BUILD_TAG"
@@ -359,17 +399,34 @@ repo manifest -r -o "$ART/manifest.xml"
 (cd -- "$ART" && sha256sum -- "$IMG_NAME" > "$IMG_NAME.sha256")
 IMG_SHA256="$(cut -d' ' -f1 "$ART/$IMG_NAME.sha256")"
 
-# Do the resolved revisions match build/dev/pinned.xml?
-PIN_CHECK="$(python3 - "$HARNESS/build/dev/pinned.xml" "$ART/manifest.xml" <<'PY'
+# Do the pre-patch bases (manifest revisions) match build/dev/pinned.xml?
+# manifest.xml records post-patch HEADs, so it cannot be compared directly.
+bad_pins=()
+{
+    echo "# path pinned_revision base_revision(pre-patch) head(built)"
+    while read -r p pin; do
+        if [ -d "$p" ]; then
+            base="$(proj_base "$p" 2>/dev/null)" || base=unknown
+            head="$(proj_head "$p" 2>/dev/null)" || head=unknown
+        else
+            base=missing; head=missing
+        fi
+        [ "$base" == "$pin" ] || bad_pins+=("$p")
+        echo "$p $pin $base $head"
+    done < <(python3 - "$HARNESS/build/dev/pinned.xml" <<'PY'
 import sys
 import xml.etree.ElementTree as ET
-pinned = {p.get("path"): p.get("revision") for p in ET.parse(sys.argv[1]).getroot().iter("project")}
-actual = {(p.get("path") or p.get("name")): p.get("revision") for p in ET.parse(sys.argv[2]).getroot().iter("project")}
-bad = [path for path, rev in sorted(pinned.items()) if actual.get(path) != rev]
-print("match" if not bad else f"MISMATCH ({len(bad)} projects): " + ", ".join(bad))
+for p in ET.parse(sys.argv[1]).getroot().iter("project"):
+    print(p.get("path"), p.get("revision"))
 PY
-)"
-[ "$PIN_CHECK" == match ] || warn "tree differs from build/dev/pinned.xml: $PIN_CHECK"
+)
+} > "$ART/pinned-bases.txt"
+if [ ${#bad_pins[@]} -eq 0 ]; then
+    PIN_CHECK="match (pre-patch bases equal build/dev/pinned.xml)"
+else
+    PIN_CHECK="MISMATCH (${#bad_pins[@]} projects): ${bad_pins[*]}"
+    warn "tree bases differ from build/dev/pinned.xml: $PIN_CHECK"
+fi
 
 first_line() { "$@" 2>&1 | head -n1 || true; }
 local_manifest_sums="$(cd .repo/local_manifests && sha256sum -- *.xml 2>/dev/null | sed 's/^/    /' || true)"
@@ -397,14 +454,17 @@ patchset_sha256: $(state_get patchset || echo unknown)
 gapps_project_present: $GAPPS_PRESENT
 treble_app: $TREBLE_APP_STATUS
 treble_app_apk_sha256: $TREBLE_APP_SHA256
+patched_projects_with_uncommitted_changes: $DIRTY_PROJECTS
+tree_unchanged_during_build: verified
 
 aosp_manifest_branch: $(git config --file .repo/manifests.git/config --get branch.default.merge || echo unknown)
 aosp_manifest_commit: $(git -C .repo/manifests rev-parse HEAD 2>/dev/null || echo unknown)
 pinned_manifest_sha256: $(sha256sum "$HARNESS/build/dev/pinned.xml" | cut -d' ' -f1)
 pinned_manifest_check: $PIN_CHECK
+pinned_bases: pinned-bases.txt
 local_manifests:
 $local_manifest_sums
-resolved_manifest: manifest.xml (repo manifest -r)
+resolved_manifest: manifest.xml (repo manifest -r; revisions are the built, post-patch HEADs)
 resolved_manifest_sha256: $(sha256sum "$ART/manifest.xml" | cut -d' ' -f1)
 
 container_image: ${DUO_DEV_CONTAINER_IMAGE:-none (not run through dev/podman.sh)}

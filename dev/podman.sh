@@ -9,8 +9,9 @@
 #
 # Environment:
 #   DUO_DEV_IMAGE        image name (default localhost/duo-de-build:22.04)
-#   DUO_DEV_CPUS         CPU limit (--cpus) and default --jobs (default: no
-#                        limit, --jobs = all host CPUs)
+#   DUO_DEV_CPUS         CPU limit (--cpus) and default build --jobs (default:
+#                        no limit, --jobs = all host CPUs; sync keeps its own
+#                        conservative default)
 #   DUO_DEV_MEMORY       memory limit (--memory), e.g. 48g (default: none; WSL's
 #                        .wslconfig limit applies)
 #   DUO_DEV_PODMAN_ARGS  extra `podman run` arguments (word-split)
@@ -93,7 +94,7 @@ done
 [ -z "${DUO_DEV_PODMAN_ARGS:-}" ] || run_args+=(${DUO_DEV_PODMAN_ARGS})
 
 case "$cmd" in
-    sync)  exec podman run "${run_args[@]}" "$IMAGE" bash "$HARNESS/dev/sync.sh" --jobs "$CPUS" "${args[@]}" "$TREE" ;;
+    sync)  exec podman run "${run_args[@]}" "$IMAGE" bash "$HARNESS/dev/sync.sh" "${args[@]}" "$TREE" ;;
     build) exec podman run "${run_args[@]}" "$IMAGE" bash "$HARNESS/dev/build.sh" --jobs "$CPUS" "${args[@]}" "$TREE" ;;
     shell) exec podman run "${run_args[@]}" "$IMAGE" bash ;;
 esac
