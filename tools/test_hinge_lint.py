@@ -82,6 +82,49 @@ class Lint(unittest.TestCase):
         hits = hl.lint(xml, (1350, 0, 1350, 1800), set())
         self.assertEqual([h["text"] for h in hits], ["Crosses"])
 
+    # Regression (review): a zero-width seam made every crossing node "span" it, and spanning nodes without text were
+    # dropped, so clickable controls across a gapless seam were never reported.
+    def test_gapless_clickable_leaf_without_text_is_reported(self):
+        xml = dump(((1300, 100, 1400, 150), {"clickable": True}))
+        self.assertEqual([h["bounds"] for h in hl.lint(xml, (1350, 0, 1350, 1800), set())], [[1300, 100, 1400, 150]])
+
+    def test_gapless_rotated_clickable_leaf_without_text_is_reported(self):
+        xml = dump(((100, 1300, 150, 1400), {"clickable": True}), rotation=1)
+        self.assertEqual([h["bounds"] for h in hl.lint(xml, (0, 1350, 1800, 1350), set())], [[100, 1300, 150, 1400]])
+
+    def test_gapless_passive_icon_crossing_the_seam_is_reported(self):
+        xml = dump(((1320, 100, 1380, 160), {}))
+        self.assertEqual(len(hl.lint(xml, (1350, 0, 1350, 1800), set())), 1)
+
+    def test_real_hinge_clickable_spanning_controls_are_reported(self):
+        band = (1350, 0, 1434, 1800)
+        xml = dump(((1300, 100, 1500, 150), {"clickable": True}),      # icon button across the whole hinge
+                   ((0, 200, 2784, 300), {"clickable": True}),          # full-width row across both panels
+                   ((1340, 400, 1440, 450), {}))                         # passive leaf covering the hinge
+        hits = hl.lint(xml, band, set())
+        self.assertEqual([h["bounds"] for h in hits],
+                         [[1300, 100, 1500, 150], [0, 200, 2784, 300], [1340, 400, 1440, 450]])
+        self.assertTrue(all(h["clickable"] for h in hits[:2]))
+
+    def test_real_hinge_rotated_clickable_spanning_control_is_reported(self):
+        xml = dump(((100, 1300, 150, 1500), {"clickable": True}), rotation=1)
+        self.assertEqual(len(hl.lint(xml, (0, 1350, 1800, 1434), set())), 1)
+
+    def test_passive_backdrops_and_containers_are_exempt(self):
+        xml = ('<hierarchy rotation="0">'
+               '<node bounds="[0,0][2700,1800]" package="app" text="" content-desc="" clickable="false">'
+               '<node bounds="[0,0][2700,1800]" package="app" text="" content-desc="" clickable="false" />'
+               '<node bounds="[600,500][2200,600]" package="app" text="" content-desc="" clickable="false" />'
+               '</node></hierarchy>')
+        self.assertEqual(hl.lint(xml, (1350, 0, 1350, 1800), set()), [])   # container + 2 backdrops
+        self.assertEqual(hl.lint(xml, (1350, 0, 1434, 1800), set()), [])
+
+    def test_long_clickable_and_checkable_count_as_controls(self):
+        xml = ('<hierarchy><node bounds="[1300,0][1400,50]" package="a" long-clickable="true" />'
+               '<node bounds="[1300,60][1400,90]" package="a" checkable="true"><node bounds="[0,0][1,1]" /></node>'
+               '</hierarchy>')
+        self.assertEqual(len(hl.lint(xml, (1350, 0, 1350, 1800), set())), 2)
+
 
 class Cli(unittest.TestCase):
     def run_cli(self, xml, *args):
@@ -116,6 +159,17 @@ class Cli(unittest.TestCase):
         code, out, _ = self.run_cli(xml, "--width", "1800", "--height", "2784")
         self.assertEqual(code, hl.EXIT_CLEAN)
         self.assertIn("0 overlap(s)", out)
+
+    def test_gapless_clickable_leaf_exits_with_overlaps(self):
+        # the reproduction from the review: was exit 0 with no hits, in both orientations
+        code, out, _ = self.run_cli(dump(((1300, 100, 1400, 150), {"clickable": True})),
+                                    "--width", "2700", "--height", "1800", "--json")
+        self.assertEqual(code, hl.EXIT_OVERLAPS)
+        self.assertEqual(json.loads(out)["hits"][0]["bounds"], [1300, 100, 1400, 150])
+        code, out, _ = self.run_cli(dump(((100, 1300, 150, 1400), {"clickable": True}), rotation=1),
+                                    "--width", "1800", "--height", "2700", "--json")
+        self.assertEqual(code, hl.EXIT_OVERLAPS)
+        self.assertEqual(json.loads(out)["hits"][0]["bounds"], [100, 1300, 150, 1400])
 
     def test_single_panel_is_clean(self):
         code, out, _ = self.run_cli(dump(), "--width", "1350", "--height", "1800")

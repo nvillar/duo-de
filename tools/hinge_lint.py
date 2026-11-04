@@ -2,9 +2,11 @@
 """hinge_lint: list UI elements that overlap the Surface Duo hinge.
 
 Dumps the visible window hierarchy with `uiautomator dump` (plus an optional screenshot) from a connected device and
-reports every node whose bounds intersect the hinge rectangle. Containers that merely span both panels are ignored; a
-node is reported when it is a leaf, or carries text / a content description, or is clickable (that is, something the
-user sees or touches).
+reports every node whose bounds intersect the hinge rectangle. A node is reported when it carries text / a content
+description, is clickable / long-clickable / checkable, or is a leaf (something the user sees or touches), even when it
+spans the whole hinge or crosses a gapless seam. Only passive nodes are exempt: containers without text or actions
+(their children are linted individually) and passive leaves laid well across both panels (backdrops, scrims: at least
+half a panel into each side).
 
   hinge_lint.py                   # current screen, spanned or not, report on stdout
   hinge_lint.py --shot out.png    # also save a screenshot with the hinge band and the offenders outlined
@@ -120,6 +122,21 @@ def intersects(a, h):
     return _overlaps(a[0], a[2], h[0], h[2]) and _overlaps(a[1], a[3], h[1], h[3])
 
 
+def _interactive(node):
+    return any(node.get(a) == "true" for a in ("clickable", "long-clickable", "checkable"))
+
+
+def _backdrop(box, hinge):
+    """A box laid well across both panels: it crosses the hinge band and reaches at least half a panel into each side
+    (the band starts one panel in from the edge, so its offset is the panel size along the split axis)."""
+    if hinge[3] - hinge[1] > hinge[2] - hinge[0]:          # band runs top to bottom: panels side by side
+        lo, hi, start, end = box[0], box[2], hinge[0], hinge[2]
+    else:                                                  # band runs left to right: panels stacked
+        lo, hi, start, end = box[1], box[3], hinge[1], hinge[3]
+    reach = start // 2
+    return lo <= start - reach and hi >= end + reach
+
+
 def lint(xml_text, hinge, pkgs):
     hits = []
     for node, box in parse(xml_text):
@@ -129,18 +146,18 @@ def lint(xml_text, hinge, pkgs):
         if box[2] <= box[0] or box[3] <= box[1] or not intersects(box, hinge):
             continue
         text = node.get("text") or node.get("content-desc")
-        horizontal = hinge[3] - hinge[1] > hinge[2] - hinge[0]
-        spans = (box[0] <= hinge[0] and box[2] >= hinge[2]) if horizontal else (box[1] <= hinge[1] and box[3] >= hinge[3])
-        if spans and not text:      # a backdrop, scrim or container laid across both panels: fine
-            continue
+        interactive = _interactive(node)
+        meaningful = bool(text) or interactive
         leaf = len(node) == 0
-        visible = node.get("text") or node.get("content-desc") or node.get("clickable") == "true"
-        if not (leaf or visible):
-            continue
+        if not meaningful and not leaf:
+            continue                # a passive container: its children are linted on their own
+        if not meaningful and _backdrop(box, hinge):
+            continue                # a passive backdrop or scrim laid across both panels: fine
+        # Everything else is reported, including controls and labels that span the hinge or cross a gapless seam.
         hits.append({
             "package": pkg, "class": node.get("class", ""), "id": node.get("resource-id", ""),
             "text": (node.get("text") or node.get("content-desc") or "")[:60],
-            "bounds": list(box), "clickable": node.get("clickable") == "true",
+            "bounds": list(box), "clickable": interactive,
             "inside_hinge": box[0] >= hinge[0] and box[2] <= hinge[2] and box[1] >= hinge[1] and box[3] <= hinge[3],
         })
     return hits
