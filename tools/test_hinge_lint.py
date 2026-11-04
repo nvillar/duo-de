@@ -6,13 +6,38 @@ import hinge_lint as hl  # noqa: E402
 
 
 def dump(*nodes, rotation=0):
-    """A minimal uiautomator dump; each node is (bounds, attrs dict)."""
-    body = "".join(
-        f'<node bounds="[{b[0]},{b[1]}][{b[2]},{b[3]}]" package="{a.get("package", "app")}"'
-        f' class="android.widget.TextView" text="{a.get("text", "")}" content-desc=""'
-        f' clickable="{str(a.get("clickable", False)).lower()}" resource-id="" />'
-        for b, a in nodes)
+    """A minimal uiautomator dump; each node is (bounds, attrs dict). attrs: text, package, cls (default
+    android.view.View) and any boolean uiautomator attribute (clickable, focusable, scrollable, ...)."""
+    def node(b, a):
+        flags = "".join(f' {k}="{str(v).lower()}"' for k, v in a.items() if k not in ("text", "package", "cls"))
+        return (f'<node bounds="[{b[0]},{b[1]}][{b[2]},{b[3]}]" package="{a.get("package", "app")}"'
+                f' class="{a.get("cls", "android.view.View")}" text="{a.get("text", "")}" content-desc=""'
+                f' resource-id=""{flags} />')
+    body = "".join(node(b, a) for b, a in nodes)
     return f'<?xml version="1.0"?><hierarchy rotation="{rotation}">{body}</hierarchy>'
+
+
+# (hinge band, size, rotation) for every hinge mode and orientation of the Duo 1 and the Duo 2
+BANDS = [
+    ((1350, 0, 1434, 1800), (2784, 1800), 0),   # duo spanned
+    ((0, 1350, 1800, 1434), (1800, 2784), 1),
+    ((1350, 0, 1350, 1800), (2700, 1800), 0),   # duo gapless
+    ((0, 1350, 1800, 1350), (1800, 2700), 1),
+    ((1344, 0, 1410, 1892), (2754, 1892), 0),   # duo2 spanned
+    ((0, 1344, 1892, 1344), (1892, 2688), 3),   # duo2 gapless, rotated
+]
+
+
+def split(band):
+    """(panel, hinge width) along the split axis of `band`."""
+    if band[3] - band[1] > band[2] - band[0]:
+        return band[0], band[2] - band[0]
+    return band[1], band[3] - band[1]
+
+
+def across(band, near, far, a=100, b=200):
+    """A box from `near` to `far` along the split axis of `band`, and a..b across it."""
+    return (near, a, far, b) if band[3] - band[1] > band[2] - band[0] else (a, near, b, far)
 
 
 class Geometry(unittest.TestCase):
@@ -112,12 +137,45 @@ class Lint(unittest.TestCase):
 
     def test_passive_backdrops_and_containers_are_exempt(self):
         xml = ('<hierarchy rotation="0">'
-               '<node bounds="[0,0][2700,1800]" package="app" text="" content-desc="" clickable="false">'
-               '<node bounds="[0,0][2700,1800]" package="app" text="" content-desc="" clickable="false" />'
-               '<node bounds="[600,500][2200,600]" package="app" text="" content-desc="" clickable="false" />'
+               '<node bounds="[0,0][2700,1800]" package="app" class="android.widget.FrameLayout" text="" clickable="false">'
+               '<node bounds="[0,0][2700,1800]" package="app" class="android.view.View" text="" clickable="false" />'
+               '<node bounds="[600,500][2200,600]" package="app" class="android.widget.FrameLayout" text="" />'
+               '<node bounds="[0,700][2784,800]" package="app" class="androidx.recyclerview.widget.RecyclerView"'
+               ' scrollable="true"><node bounds="[0,700][1300,800]" package="app" class="android.view.View" /></node>'
                '</node></hierarchy>')
-        self.assertEqual(hl.lint(xml, (1350, 0, 1350, 1800), set()), [])   # container + 2 backdrops
+        self.assertEqual(hl.lint(xml, (1350, 0, 1350, 1800), set()), [])   # containers + 2 backdrops
         self.assertEqual(hl.lint(xml, (1350, 0, 1434, 1800), set()), [])
+
+    # Regression (re-review): a passive-looking leaf was exempted by size alone, hiding wide sliders and images.
+    def test_wide_slider_is_reported_in_every_mode_and_orientation(self):
+        for band, _, rot in BANDS:
+            panel, hinge = split(band)
+            box = across(band, panel // 2 - 75, panel + hinge + panel // 2 + 75)
+            for attrs in ({"cls": "android.widget.SeekBar", "focusable": True},     # touch-handled, not clickable
+                          {"cls": "android.widget.ProgressBar"},                     # not even focusable
+                          {"cls": "android.widget.RatingBar", "focusable": True},
+                          {"cls": "android.view.View", "focusable": True},           # custom slider as a plain View
+                          {"cls": "android.view.View", "scrollable": True}):
+                with self.subTest(band=band, cls=attrs["cls"], attrs=attrs):
+                    self.assertEqual([h["bounds"] for h in hl.lint(dump((box, attrs), rotation=rot), band, set())],
+                                     [list(box)])
+
+    def test_wide_image_content_is_reported_in_every_mode_and_orientation(self):
+        for band, _, rot in BANDS:
+            panel, hinge = split(band)
+            full = across(band, 0, 2 * panel + hinge, 0, 1800)
+            wide = across(band, panel // 2 - 75, panel + hinge + panel // 2 + 75)
+            for box in (full, wide):
+                for cls in ("android.widget.ImageView", "android.widget.TextView", "com.example.ChartView"):
+                    with self.subTest(band=band, box=box, cls=cls):
+                        hits = hl.lint(dump((box, {"cls": cls}), rotation=rot), band, set())
+                        self.assertEqual([h["bounds"] for h in hits], [list(box)])
+
+    def test_passive_class_with_state_is_not_a_backdrop(self):
+        band = (1350, 0, 1434, 1800)
+        for attr in ("focusable", "clickable", "scrollable", "selected", "checked", "long-clickable", "checkable"):
+            with self.subTest(attr=attr):
+                self.assertEqual(len(hl.lint(dump(((0, 0, 2784, 100), {attr: True})), band, set())), 1)
 
     def test_long_clickable_and_checkable_count_as_controls(self):
         xml = ('<hierarchy><node bounds="[1300,0][1400,50]" package="a" long-clickable="true" />'

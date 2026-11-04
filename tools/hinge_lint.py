@@ -2,11 +2,13 @@
 """hinge_lint: list UI elements that overlap the Surface Duo hinge.
 
 Dumps the visible window hierarchy with `uiautomator dump` (plus an optional screenshot) from a connected device and
-reports every node whose bounds intersect the hinge rectangle. A node is reported when it carries text / a content
-description, is clickable / long-clickable / checkable, or is a leaf (something the user sees or touches), even when it
-spans the whole hinge or crosses a gapless seam. Only passive nodes are exempt: containers without text or actions
-(their children are linted individually) and passive leaves laid well across both panels (backdrops, scrims: at least
-half a panel into each side).
+reports every node whose bounds intersect the hinge rectangle, including nodes that span the whole hinge or cross a
+gapless seam. Every leaf is reported (labels, images, sliders, progress/rating bars, custom views...), and so is any
+container that has text / a content description or is clickable / long-clickable / checkable / focusable. Only two
+kinds of node are exempt: containers without text or actions (their children are linted individually; this includes
+scrolling lists laid across both panels) and explicitly passive background leaves: a plain View / ViewGroup /
+FrameLayout / LinearLayout / RelativeLayout with no text and no focusable, clickable, scrollable, selected or checked
+state, laid well across both panels (at least half a panel into each side). Size alone never exempts a node.
 
   hinge_lint.py                   # current screen, spanned or not, report on stdout
   hinge_lint.py --shot out.png    # also save a screenshot with the hinge band and the offenders outlined
@@ -122,13 +124,29 @@ def intersects(a, h):
     return _overlaps(a[0], a[2], h[0], h[2]) and _overlaps(a[1], a[3], h[1], h[3])
 
 
-def _interactive(node):
-    return any(node.get(a) == "true" for a in ("clickable", "long-clickable", "checkable"))
+ACTION_ATTRS = ("clickable", "long-clickable", "checkable", "focusable")
+STATE_ATTRS = ACTION_ATTRS + ("scrollable", "selected", "checked")
+# Classes that are only ever a background, scrim or divider when they are a leaf without text or any state. Anything
+# else (ImageView, TextView, SeekBar, ProgressBar, RatingBar, custom views...) is content and always reported.
+PASSIVE_CLASSES = frozenset({
+    "android.view.View", "android.view.ViewGroup", "android.widget.FrameLayout", "android.widget.LinearLayout",
+    "android.widget.RelativeLayout",
+})
 
 
-def _backdrop(box, hinge):
-    """A box laid well across both panels: it crosses the hinge band and reaches at least half a panel into each side
-    (the band starts one panel in from the edge, so its offset is the panel size along the split axis)."""
+def _flag(node, attrs):
+    return any(node.get(a) == "true" for a in attrs)
+
+
+def _backdrop(node, box, hinge):
+    """A passive background leaf laid well across both panels: an allowlisted plain class, no text and no
+    focusable/clickable/scrollable/selected/checked state, crossing the hinge band and reaching at least half a panel
+    into each side (the band starts one panel in from the edge, so its offset is the panel size along the split axis).
+    Size alone never exempts a node."""
+    if node.get("class", "") not in PASSIVE_CLASSES or _flag(node, STATE_ATTRS):
+        return False
+    if node.get("text") or node.get("content-desc"):
+        return False
     if hinge[3] - hinge[1] > hinge[2] - hinge[0]:          # band runs top to bottom: panels side by side
         lo, hi, start, end = box[0], box[2], hinge[0], hinge[2]
     else:                                                  # band runs left to right: panels stacked
@@ -146,18 +164,20 @@ def lint(xml_text, hinge, pkgs):
         if box[2] <= box[0] or box[3] <= box[1] or not intersects(box, hinge):
             continue
         text = node.get("text") or node.get("content-desc")
-        interactive = _interactive(node)
-        meaningful = bool(text) or interactive
-        leaf = len(node) == 0
-        if not meaningful and not leaf:
-            continue                # a passive container: its children are linted on their own
-        if not meaningful and _backdrop(box, hinge):
-            continue                # a passive backdrop or scrim laid across both panels: fine
-        # Everything else is reported, including controls and labels that span the hinge or cross a gapless seam.
+        actionable = _flag(node, ACTION_ATTRS)
+        if len(node):
+            # A container: reported only when it has text or can be touched / focused itself; otherwise (including
+            # scrolling lists laid across both panels) its children are linted on their own.
+            if not (text or actionable):
+                continue
+        elif _backdrop(node, box, hinge):
+            continue                # a passive background or scrim laid across both panels: fine
+        # Everything else is reported: controls, labels, images, range controls, any other leaf, also when they span
+        # the hinge or cross a gapless seam.
         hits.append({
             "package": pkg, "class": node.get("class", ""), "id": node.get("resource-id", ""),
             "text": (node.get("text") or node.get("content-desc") or "")[:60],
-            "bounds": list(box), "clickable": interactive,
+            "bounds": list(box), "clickable": actionable or _flag(node, ("scrollable",)),
             "inside_hinge": box[0] >= hinge[0] and box[2] <= hinge[2] and box[1] >= hinge[1] and box[3] <= hinge[3],
         })
     return hits
