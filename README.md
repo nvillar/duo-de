@@ -162,6 +162,9 @@ Usually, one time isn't enough and you'll end up with a bootloop, follow the ste
 3. When the Android logo shows up with No command underneath it, press and hold the power button, then press volume up, and release the power button. It can be a bit finnicky so experiment a little bit (try not to hold the power button for a long time you'll hard reset.)
 4. You should be back in recovery, continue earlier steps from step 2.
 
+## Building from source
+See [docs/development-setup.md](docs/development-setup.md) for setting up a build environment and the developer build scripts in `dev/`.
+
 ## Issues
 Any issues, please 
 [open an issue](https://github.com/Archfx/duo-de/issues/new/choose) with a detailed description. Please use the [discussion](https://github.com/Archfx/duo-de/discussions/new/choose) section for any questions regarding flashing and similar stuff.
