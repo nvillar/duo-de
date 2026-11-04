@@ -18,7 +18,11 @@
 #   --patch-only         apply patches and generate makefiles, then stop
 #   --unshallow          fetch full history for shallow projects that receive
 #                        patches (git am -3 needs the patches' base blobs);
-#                        without it a shallow patched project is an error
+#                        and android-16.0.0_r* tags; without it a shallow
+#                        patched project is an error
+#   --repair-checkouts   `git reset --hard HEAD` unpatched projects whose index
+#                        differs from HEAD (interrupted checkout) and that have
+#                        no local commits; without it such projects are an error
 #
 # Writes only inside <aosp-tree> and the artifacts directory. Never uploads,
 # never uses release keys, never runs `git clean` or `repo sync`.
@@ -38,9 +42,10 @@ SKIP_TREBLE_APP=false
 INSTALLCLEAN=true
 PATCH_ONLY=false
 UNSHALLOW=false
+REPAIR_CHECKOUTS=false
 TREE_ARG=""
 
-usage() { sed -n '2,26p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,30p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -54,6 +59,7 @@ while [ $# -gt 0 ]; do
         --no-installclean) INSTALLCLEAN=false; shift ;;
         --patch-only) PATCH_ONLY=true; shift ;;
         --unshallow) UNSHALLOW=true; shift ;;
+        --repair-checkouts) REPAIR_CHECKOUTS=true; shift ;;
         -h|--help) usage; exit 0 ;;
         -*) die "unknown option $1 (see --help)" ;;
         *) [ -z "$TREE_ARG" ] || die "only one <aosp-tree> allowed"; TREE_ARG="$1"; shift ;;
@@ -201,6 +207,49 @@ apply_patches() {
     PATCH_STATUS="applied"
     log "Patches applied (patch set $want)"
 }
+
+# An interrupted `repo sync` checkout can leave a project with every tracked
+# file staged for deletion; Soong then fails with undefined modules. Check that
+# no project outside the patch targets (handled by apply_patches) has an index
+# differing from HEAD. Fast: one `git diff --cached --quiet` per project.
+check_checkouts() {
+    local p bad=() refuse=()
+    # shellcheck disable=SC2016  # expanded by the sh -c below
+    local check_one='git -C "$1" diff --cached --quiet --ignore-submodules >/dev/null 2>&1 || printf "%s\n" "$1"'
+    if [ ! -f .repo/project.list ]; then
+        warn "no .repo/project.list; skipping the checkout integrity check"
+        return 0
+    fi
+    prepare_patch_root
+    log "Checking checkouts of $(grep -c . .repo/project.list) projects"
+    while IFS= read -r p; do
+        [ -n "$p" ] && bad+=("$p")
+    done < <(while IFS= read -r p; do
+                 [ -n "$p" ] && [ -z "${SEEN[$p]:-}" ] && printf '%s\0' "$p"
+             done < .repo/project.list \
+             | xargs -0 -r -n1 -P"$JOBS" sh -c "$check_one" _ \
+             | LC_ALL=C sort)
+    [ ${#bad[@]} -gt 0 ] || return 0
+
+    printf '  %s\n' "${bad[@]}" >&2
+    if ! $REPAIR_CHECKOUTS; then
+        die "${#bad[@]} projects have staged changes or a broken checkout (often an interrupted repo sync: every file staged for deletion). Repair with: git -C <project> reset --hard HEAD, or rerun with --repair-checkouts (only for projects without local commits)"
+    fi
+    for p in "${bad[@]}"; do
+        if [ ! -e "$p/.git" ] || [ "$(proj_head "$p" || true)" != "$(proj_base "$p" 2>/dev/null || true)" ]; then
+            refuse+=("$p")
+            continue
+        fi
+        log "  repairing $p (git reset --hard HEAD)"
+        git -C "$p" reset -q --hard HEAD
+        git -C "$p" diff --cached --quiet --ignore-submodules || refuse+=("$p")
+    done
+    if [ ${#refuse[@]} -gt 0 ]; then
+        printf '  %s\n' "${refuse[@]}" >&2
+        die "not repairing ${#refuse[@]} projects: missing, local commits (HEAD differs from the manifest revision) or still inconsistent; fix them by hand or re-run dev/sync.sh"
+    fi
+}
+check_checkouts
 
 PATCH_STATUS="skipped (--skip-patches; tree used as is)"
 if $SKIP_PATCHES; then
