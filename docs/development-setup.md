@@ -126,7 +126,11 @@ The developer flow builds only the vanilla `treble_arm64_bvN-bp2a-userdebug` sys
 
 - runs `repo init` for `android-16.0.0_r4` with `--git-lfs --depth=1` if the tree is new (`--depth 0` for full history);
 - installs `build/dev/pinned.xml` and `build/remove.xml` as local manifests, moving any other local manifest to `.repo/local_manifests.disabled/`;
-- runs `repo sync -c --no-clone-bundle --no-tags`. It does not `git clean`, reset or force-sync.
+- runs `repo sync -c --no-clone-bundle --no-tags --retry-fetches=5` with 4 parallel jobs. It does not `git clean`, reset or force-sync.
+
+android.googlesource.com rate-limits heavy clients with **HTTP 429**; a first sync at high concurrency (for example `-j16`) can hit it. `dev/sync.sh` therefore defaults to `--jobs 4`, retries each fetch (`--retry-fetches 5`) and re-runs a failed sync up to `--attempts 4` times, pausing 60 s, 120 s, 240 s in between. If it still fails, wait a while and rerun with `--jobs 2`; finished projects are not fetched again.
+
+`dev/sync.sh` and `dev/build.sh` take the same lock (`<tree>/.duo-dev/lock`); either refuses to start while the other is running on the tree.
 
 The pinned manifest omits the GApps project. Add `--with-gapps` to include `vendor/gapps` (also pinned).
 
@@ -142,7 +146,7 @@ The pinned manifest omits the GApps project. Add `--with-gapps` to include `vend
 2. Writes `device/phh/treble/duo-dev.mk` from `build/aosp.mk`, with the updater feed `ro.system.ota.json_url` replaced, and generates the product makefiles from it.
 3. Rebuilds TrebleApp (`treble_app`, Gradle; needs network access on first run) and installs it as `vendor/hardware_overlay/TrebleApp/app.apk`, as `build.sh` does.
 4. Builds `systemimage` with `BUILD_NUMBER` set to a unique build id, for example `duodev.20261104081530.b43214d2`. The id appears in the build fingerprint.
-5. Verifies the AOSP test keys (`test-keys`), the updater feed and the fingerprint, then writes the artifacts.
+5. Verifies the AOSP test keys (`test-keys`), the updater feed and the fingerprint, and that the patched projects, TrebleApp and local manifests did not change during the build, then writes the artifacts.
 
 Results go to `~/aosp/duo-dev-artifacts/<build-id>/`:
 
@@ -150,8 +154,9 @@ Results go to `~/aosp/duo-dev-artifacts/<build-id>/`:
 |---|---|
 | `system-treble_arm64_bvN-<build-id>.img` | the system image |
 | `…img.sha256` | its SHA-256 |
-| `provenance.txt` | build id, fingerprint, harness commit, patch-set hash, pinned-manifest check, container image id, toolchain versions |
-| `manifest.xml` | `repo manifest -r` of the tree that was built |
+| `provenance.txt` | build id, fingerprint, harness commit, patch-set hash, pinned-manifest check, patched projects with uncommitted changes, container image id, toolchain versions |
+| `manifest.xml` | `repo manifest -r` of the tree that was built (patched projects show their post-patch HEADs) |
+| `pinned-bases.txt` | per pinned project: pinned revision, pre-patch base and built HEAD; the pin check compares the first two |
 | `patch-state.txt`, `system-build.prop` | applied patch state and the image's build properties |
 | `SHA256SUMS` | checksums of all of the above |
 
@@ -161,7 +166,7 @@ Useful options (`dev/build.sh --help`):
 |---|---|
 | `--label TEXT` | append a label to the build id |
 | `--ota-url URL` | updater feed to bake in (https only; Archfx URLs are refused) |
-| `--reset-patches` | abort a stuck `git am` and force patched projects back to their manifest revision, discarding tracked changes in them |
+| `--reset-patches` | abort a stuck `git am`, force patched projects back to their manifest revision (discarding tracked changes in them) and re-apply all patches |
 | `--patch-only` | apply patches and generate makefiles, then stop |
 | `--skip-treble-app` | keep the TrebleApp already in `vendor/hardware_overlay` |
 | `--no-installclean` | skip `make installclean` for faster incremental builds |
@@ -185,7 +190,15 @@ git ls-remote https://github.com/Archfx/duoPosture refs/heads/main
 
 Keep the resolution date in the file's header current, re-run `dev/podman.sh sync`, then build.
 
-### 5.5 Copying the image to Windows
+### 5.5 Testing the developer scripts
+
+After changing anything in `dev/`, run the mock tests. They use small synthetic Git repositories and stubbed `repo`/`lunch`/`make` in a temporary directory, and need no Android tree, network or container:
+
+```bash
+~/duo-de/dev/tests/run.sh
+```
+
+### 5.6 Copying the image to Windows
 
 ```bash
 cp ~/aosp/duo-dev-artifacts/<build-id>/system-*.img* /mnt/c/Users/<you>/Downloads/
