@@ -1,0 +1,71 @@
+# DUO-DE developer build environment (Podman).
+# Based on build/Dockerfile, without a baked-in Git identity, without copying
+# the harness into the image (it is bind-mounted), and without piping remote
+# install scripts: repo and git-lfs come from the Ubuntu archive.
+#
+# Build:  dev/podman.sh image
+ARG BASE_IMAGE=docker.io/library/ubuntu:22.04
+FROM ${BASE_IMAGE}
+
+ARG DEBIAN_FRONTEND=noninteractive
+RUN dpkg --add-architecture i386 && \
+    apt-get update && apt-get install -y \
+    aapt \
+    bc \
+    bison \
+    build-essential \
+    ca-certificates \
+    curl \
+    dos2unix \
+    file \
+    flex \
+    fontconfig \
+    g++-multilib \
+    gcc-multilib \
+    git \
+    git-lfs \
+    gnupg \
+    gperf \
+    imagemagick \
+    jq \
+    libncurses5 \
+    libssl-dev \
+    libstdc++6 \
+    libstdc++6:i386 \
+    libxml2-utils \
+    locales \
+    lunzip \
+    lzip \
+    lzop \
+    m4 \
+    openjdk-17-jdk \
+    procps \
+    python-is-python3 \
+    python3 \
+    python3-pip \
+    repo \
+    rsync \
+    simg2img \
+    squashfs-tools \
+    tree \
+    unzip \
+    wget \
+    xattr \
+    xmlstarlet \
+    xsltproc \
+    xz-utils \
+    zip \
+    zlib1g \
+    zlib1g:i386 && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+
+RUN locale-gen en_US.UTF-8 && update-locale LANG=en_US.UTF-8 && \
+    git lfs install --system && \
+    git config --system color.ui auto
+
+ENV LANG=en_US.UTF-8 \
+    LC_ALL=en_US.UTF-8 \
+    JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+
+LABEL org.opencontainers.image.title="duo-de-build" \
+      org.opencontainers.image.description="DUO-DE developer build environment (Ubuntu 22.04, OpenJDK 17)"
