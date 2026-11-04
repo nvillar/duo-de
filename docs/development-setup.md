@@ -142,11 +142,11 @@ The pinned manifest omits the GApps project. Add `--with-gapps` to include `vend
 
 `dev/build.sh` (run inside the container by `dev/podman.sh`):
 
-1. Applies the `trebledroid`, `personal` and `duo` patch sets in that order through the repository's `patch.sh` (`git am -3`). It records the result in `~/aosp/.duo-dev/patch-state`; later runs skip patching while the patches and project heads are unchanged, and keep uncommitted edits in the tree. If the patches change, patched projects are moved back to their manifest revision and the patches re-applied. A patch that fails to apply stops the build.
+1. Applies the `trebledroid`, `personal` and `duo` patch sets in that order through the repository's `patch.sh` (`git am -3`). It records the result in `~/aosp/.duo-dev/patch-state`; later runs skip patching while the patches and project heads are unchanged, and keep uncommitted edits in the tree. If the patches change, patched projects are moved back to their manifest revision and the patches re-applied. If a fetch-only `repo sync` moved a project's manifest revision, the patches are re-applied on the new revision. A patch that fails to apply stops the build.
 2. Writes `device/phh/treble/duo-dev.mk` from `build/aosp.mk`, with the updater feed `ro.system.ota.json_url` replaced, and generates the product makefiles from it.
 3. Rebuilds TrebleApp (`treble_app`, Gradle; needs network access on first run) and installs it as `vendor/hardware_overlay/TrebleApp/app.apk`, as `build.sh` does.
 4. Builds `systemimage` with `BUILD_NUMBER` set to a unique build id, for example `duodev.20261104081530.b43214d2`. The id appears in the build fingerprint.
-5. Verifies the AOSP test keys (`test-keys`), the updater feed and the fingerprint, and that the patched projects, TrebleApp and local manifests did not change during the build, then writes the artifacts.
+5. Verifies the AOSP test keys (`test-keys`), the updater feed and the fingerprint, and that the patched and pinned source projects (commits, tracked edits, untracked non-ignored files), the generated product makefiles, TrebleApp and the local manifests did not change during the build, then writes the artifacts.
 
 Results go to `~/aosp/duo-dev-artifacts/<build-id>/`:
 
@@ -154,9 +154,9 @@ Results go to `~/aosp/duo-dev-artifacts/<build-id>/`:
 |---|---|
 | `system-treble_arm64_bvN-<build-id>.img` | the system image |
 | `…img.sha256` | its SHA-256 |
-| `provenance.txt` | build id, fingerprint, harness commit, patch-set hash, pinned-manifest check, patched projects with uncommitted changes, container image id, toolchain versions |
+| `provenance.txt` | build id, fingerprint, harness commit, patch-set hash, pinned-manifest check, projects with uncommitted changes, container image id, toolchain versions |
 | `manifest.xml` | `repo manifest -r` of the tree that was built (patched projects show their post-patch HEADs) |
-| `pinned-bases.txt` | per pinned project: pinned revision, pre-patch base and built HEAD; the pin check compares the first two |
+| `pinned-bases.txt` | per pinned project: pinned revision, the revision compared with it (for patched projects the base the patches were applied on, otherwise the checked-out HEAD), repo's current `m/` ref (diagnostic only) and the built HEAD |
 | `patch-state.txt`, `system-build.prop` | applied patch state and the image's build properties |
 | `SHA256SUMS` | checksums of all of the above |
 
