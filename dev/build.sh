@@ -16,6 +16,9 @@
 #   --skip-treble-app    keep vendor/hardware_overlay's TrebleApp; do not rebuild it
 #   --no-installclean    skip `make installclean` (faster, may keep stale files)
 #   --patch-only         apply patches and generate makefiles, then stop
+#   --unshallow          fetch full history for shallow projects that receive
+#                        patches (git am -3 needs the patches' base blobs);
+#                        without it a shallow patched project is an error
 #
 # Writes only inside <aosp-tree> and the artifacts directory. Never uploads,
 # never uses release keys, never runs `git clean` or `repo sync`.
@@ -34,9 +37,10 @@ SKIP_PATCHES=false
 SKIP_TREBLE_APP=false
 INSTALLCLEAN=true
 PATCH_ONLY=false
+UNSHALLOW=false
 TREE_ARG=""
 
-usage() { sed -n '2,23p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,26p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -49,6 +53,7 @@ while [ $# -gt 0 ]; do
         --skip-treble-app) SKIP_TREBLE_APP=true; shift ;;
         --no-installclean) INSTALLCLEAN=false; shift ;;
         --patch-only) PATCH_ONLY=true; shift ;;
+        --unshallow) UNSHALLOW=true; shift ;;
         -h|--help) usage; exit 0 ;;
         -*) die "unknown option $1 (see --help)" ;;
         *) [ -z "$TREE_ARG" ] || die "only one <aosp-tree> allowed"; TREE_ARG="$1"; shift ;;
@@ -161,6 +166,44 @@ state_head() { [ -f "$STATE_FILE" ] && awk -v p="$1" '$1 == "project" && $2 == p
 # Manifest revision the project's patches were applied on top of.
 state_base() { [ -f "$STATE_FILE" ] && awk -v p="$1" '$1 == "project" && $2 == p { print $3; exit }' "$STATE_FILE"; }
 
+is_shallow() { [ "$(git -C "$1" rev-parse --is-shallow-repository)" == true ]; }
+
+# git am -3 falls back to a 3-way merge using the blobs named in each patch;
+# a shallow (--depth=1) checkout usually lacks them ("sha1 information is
+# lacking or useless"). Patched projects therefore need full history.
+ensure_full_history() {
+    local p shallow=() remote base attempt pause
+    for p in "${PROJECT_PATHS[@]}"; do
+        if is_shallow "$p"; then shallow+=("$p"); fi
+    done
+    [ ${#shallow[@]} -gt 0 ] || return 0
+    if ! $UNSHALLOW; then
+        printf '  %s\n' "${shallow[@]}" >&2
+        die "${#shallow[@]} patched projects are shallow clones; rerun with --unshallow (fetches their full history) or see docs/development-setup.md"
+    fi
+    log "Fetching full history for ${#shallow[@]} shallow patched projects"
+    for p in "${shallow[@]}"; do
+        remote="$(git -C "$p" remote | head -n1)"
+        [ -n "$remote" ] || die "$p has no git remote to unshallow from"
+        base="$(proj_base "$p")"
+        pause=30
+        for ((attempt = 1; ; attempt++)); do
+            log "  $p ($remote, attempt $attempt/4)"
+            if git -C "$p" fetch -q --unshallow --no-tags "$remote" "$base" && ! is_shallow "$p"; then
+                break
+            fi
+            # Fall back to the remote's configured refspec.
+            if ! is_shallow "$p" || { git -C "$p" fetch -q --unshallow --no-tags "$remote" && ! is_shallow "$p"; }; then
+                break
+            fi
+            [ "$attempt" -lt 4 ] || die "could not unshallow $p (HTTP 429 rate limiting? wait and rerun)"
+            warn "unshallowing $p failed; retrying in ${pause}s"
+            sleep "$pause"
+            pause=$((pause * 2))
+        done
+    done
+}
+
 apply_patches() {
     local want p head base rec
     log "Checking DUO-DE patches"
@@ -187,6 +230,8 @@ apply_patches() {
             return
         fi
     fi
+
+    ensure_full_history
 
     log "Preparing ${#PROJECT_PATHS[@]} projects"
     for p in "${PROJECT_PATHS[@]}"; do
@@ -431,7 +476,7 @@ IMG_NAME="system-$DUO_LUNCH_PRODUCT-$BUILD_TAG.img"
 log "Collecting artifacts in $ART"
 cp --reflink=auto -- "$OUT/system.img" "$ART/$IMG_NAME"
 cp -- "$OUT/system/build.prop" "$ART/system-build.prop"
-repo manifest -r -o "$ART/manifest.xml"
+duo_repo manifest -r -o "$ART/manifest.xml"
 [ ! -f "$STATE_FILE" ] || cp -- "$STATE_FILE" "$ART/patch-state.txt"
 (cd -- "$ART" && sha256sum -- "$IMG_NAME" > "$IMG_NAME.sha256")
 IMG_SHA256="$(cut -d' ' -f1 "$ART/$IMG_NAME.sha256")"
@@ -521,7 +566,7 @@ os: $(sed -n 's/^PRETTY_NAME="\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' /etc/os-release 2>
 kernel: $(uname -sr)
 java: $(first_line java -version)
 git: $(git --version)
-repo: $(first_line repo --version)
+repo: $(first_line duo_repo --version)
 jobs: $JOBS
 installclean: $INSTALLCLEAN
 EOF
