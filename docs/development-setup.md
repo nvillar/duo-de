@@ -132,6 +132,14 @@ The image's `repo` launcher (Ubuntu's, 2.17) is older than the one `repo init` p
 
 The developer flow builds only the vanilla `treble_arm64_bvN-bp2a-userdebug` system image. It never uploads, never uses the upstream release keys, and only writes inside the Android tree and the artifacts directory.
 
+### Long-running commands under WSL
+
+WSL shuts a distribution down shortly after the last attached `wsl.exe` client exits, even if Linux processes (a sync or build) are still running, and even with systemd enabled. Run long syncs and builds from a terminal that stays attached: open `wsl -d duo-build`, start `tmux` (or `screen`) inside it, run the command there, and keep that Windows terminal window open.
+
+Microsoft documents the delay as `instanceIdleTimeout` in the `[general]` section of `%UserProfile%\.wslconfig` (milliseconds, default 15000; `-1` disables automatic shutdown), see [Advanced settings configuration in WSL](https://learn.microsoft.com/windows/wsl/wsl-config#general-wsl-settings). Changing it is optional; an attached terminal is enough.
+
+An interrupted build resumes incrementally: rerun the same `dev/podman.sh build` command **without** `--reset-patches`. The recorded patches are kept and the build system reuses `out/`. An interrupted sync is resumed by rerunning `dev/podman.sh sync`; afterwards the build's checkout check (see 5.8) catches half-written projects.
+
 ### 5.1 Sync the source
 
 ```bash
@@ -262,6 +270,7 @@ Verify the checksum on Windows before flashing:
 | `sha1 information is lacking or useless ... could not build fake ancestor` | Missing history or base tags in a patched project: rerun with `--reset-patches --unshallow` (see 5.1). |
 | A patch set fails to apply for another reason | Run `dev/check-apply.sh` to list every failing patch, then regenerate them (see 5.5). |
 | `crun: ... sd-bus call: Permission denied` | Rootless Podman without a systemd user session; see 4.2. |
+| The distribution stopped in the middle of a sync or build | The `wsl.exe` client that started it exited, and WSL idled out the distribution. Run long commands from an attached terminal with `tmux`/`screen` (see "Long-running commands under WSL" above), then rerun the same command without `--reset-patches` to continue incrementally. |
 | *a dev/build.sh or dev/sync.sh is running on the tree* | Another developer script holds `<tree>/.duo-dev/lock`. Wait for it to finish. |
 
 ## 6. Flashing a system image
