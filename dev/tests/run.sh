@@ -11,7 +11,7 @@ out="$DUO_TEST_DIR.log"
 { bash "$here/mock-patches.sh" "$(dirname -- "$(dirname -- "$here")")"; bash "$here/mock-build.sh"; } >"$out" 2>&1 || true
 grep -E '^(PASS|FAIL)' "$out" || true
 pass=$(grep -c '^PASS' "$out" || true)
-if grep -q '^FAIL' "$out" || [ "$pass" -lt 28 ]; then
+if grep -q '^FAIL' "$out" || [ "$pass" -lt 35 ]; then
     echo "mock tests FAILED ($pass passed); log: $out"; exit 1
 fi
 rm -f -- "$out"

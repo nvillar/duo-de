@@ -69,3 +69,21 @@ if git -C "$T/tree/frameworks/base" diff --quiet HEAD; then echo "PASS reset dis
 grep -c . "$T/tree/device/phh/treble/duo-dev.mk"; cat "$T/tree/device/phh/treble/duo-dev.mk"
 # gapps present -> its patches applied
 mk_project vendor/gapps; git -C "$T/tree/vendor/gapps" checkout -q -- . ; run; head_of vendor/gapps
+# Regression (baseline run): shallow patched projects fail early; --unshallow fetches history.
+S="$T/src/core"; mkdir -p "$S"; git -C "$S" init -q -b main
+echo one > "$S/file.txt"; git -C "$S" add -A; git -C "$S" commit -qm one
+echo two >> "$S/file.txt"; git -C "$S" commit -qam two
+git -C "$S" checkout -q -b tmp; echo core1 >> "$S/file.txt"; git -C "$S" commit -qam core1
+mkdir -p "$H/patches/duo/platform_system_core"
+git -C "$S" format-patch -q -1 --stdout > "$H/patches/duo/platform_system_core/0001-core1.patch"
+git -C "$S" checkout -q main
+git clone -q --depth=1 --branch main "file://$S" "$T/tree/system/core"
+git -C "$T/tree/system/core" update-ref refs/remotes/m/android-16.0.0_r4 HEAD
+git -C "$T/tree/system/core" -c advice.detachedHead=false checkout -q --detach
+git -C "$H" add -A; git -C "$H" commit -qm "core patch"
+if run 2>"$T/shallow.err"; then echo "FAIL shallow patched project accepted"; else
+    grep -q "system/core" "$T/shallow.err" && grep -q -- "--unshallow" "$T/shallow.err" && echo "PASS shallow patched project refused with instructions"; fi
+[ "$(git -C "$T/tree/system/core" rev-parse --is-shallow-repository)" == true ] && echo "PASS shallow project untouched without --unshallow"
+run --unshallow >/dev/null 2>&1 && echo "PASS --unshallow applies patches"
+[ "$(git -C "$T/tree/system/core" rev-parse --is-shallow-repository)" == false ] && echo "PASS project unshallowed"
+git -C "$T/tree/system/core" log --format=%s | tr '\n' ' ' | grep -q "core1 two one" && echo "PASS full history and patch present"

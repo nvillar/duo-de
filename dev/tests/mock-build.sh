@@ -104,3 +104,18 @@ mutate unpatched reject; git -C "$T/tree/vendor/hardware_overlay" checkout -q --
 mutate untracked reject; rm -f "$T/tree/vendor/hardware_overlay/newsrc.c"
 mutate genmk reject
 mutate patched reject
+# Regression (baseline run): dev/podman.sh passes Podman 3.4 global options for WSL2.
+cat > "$T/bin/podman" <<'X'
+#!/bin/bash
+echo "$*" >> "$PODMAN_LOG"
+case "$*" in *"image inspect"*) echo sha256:feedface ;; esac
+exit 0
+X
+chmod +x "$T/bin/podman"; export PODMAN_LOG="$T/podman.log"; : > "$PODMAN_LOG"
+bash "$H/dev/podman.sh" build "$T/tree" --skip-treble-app </dev/null >/dev/null 2>&1
+grep -q -- '^--cgroup-manager=cgroupfs --events-backend=file run .*--userns=keep-id' "$PODMAN_LOG" \
+    && grep -q -- '^--cgroup-manager=cgroupfs --events-backend=file image exists' "$PODMAN_LOG" \
+    && echo "PASS podman.sh passes cgroupfs/file global options" || { echo FAIL; cat "$PODMAN_LOG"; }
+: > "$PODMAN_LOG"
+DUO_DEV_CGROUP_MANAGER=default DUO_DEV_EVENTS_BACKEND=default bash "$H/dev/podman.sh" build "$T/tree" </dev/null >/dev/null 2>&1
+grep -q '^run ' "$PODMAN_LOG" && echo "PASS podman.sh global options can be disabled" || { echo FAIL; cat "$PODMAN_LOG"; }
