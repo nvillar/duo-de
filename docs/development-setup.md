@@ -150,14 +150,18 @@ android.googlesource.com rate-limits heavy clients with **HTTP 429**; a first sy
 
 The pinned manifest omits the GApps project. Add `--with-gapps` to include `vendor/gapps` (also pinned).
 
-**Shallow checkouts and patches.** A `--depth=1` tree is fine for building, but not for the projects that receive DUO-DE patches: `git am -3` needs the blobs each patch was made against, and fails with `sha1 information is lacking or useless ... could not build fake ancestor` when they are missing. `dev/build.sh` checks every patched project (about 37) before applying patches and stops with a list if any is shallow. Run it once with `--unshallow` to fetch their full history (from the project's own remote, under the tree lock, with retries and growing pauses for HTTP 429):
+**History needed by the patches.** A `--depth=1` tree is fine for building, but `git am -3` needs the blobs each patch was made against, and fails with `sha1 information is lacking or useless ... could not build fake ancestor` when they are missing. The patched projects (about 37) therefore need:
+
+- **full history**, not a shallow clone. `dev/build.sh` checks this before applying patches and stops with a list of shallow projects;
+- for AOSP-hosted projects (remote `aosp`), the **earlier release tags** `android-16.0.0_r1` to `r3`. Several patches were generated on r2-era sources; their base blobs are reachable only from those tags, not from the r4 branch. GitHub-hosted projects and projects without such tags are not affected.
+
+Run the first patch step with `--unshallow`, which fetches both, from each project's own remote, under the tree lock, with retries and growing pauses for HTTP 429:
 
 ```bash
 ~/duo-de/dev/podman.sh build ~/aosp --unshallow --patch-only
 ```
 
-This downloads the history of those projects only, which includes large ones such as `frameworks/base` and `frameworks/av`: expect several GB more disk and tens of minutes, depending on bandwidth and rate limiting. Later builds do not need the option. Unshallowing gives `git am -3` the history it needs; a patch whose base is not in the project's history still fails, and must be rebased.
-
+It fetches the full history of those projects only, which includes large ones such as `frameworks/base` and `frameworks/av`: expect several GB more disk and tens of minutes, depending on bandwidth and rate limiting. Tags are fetched with the refspec `+refs/tags/android-16.0.0_r*:refs/tags/android-16.0.0_r*`, and each project is recorded in `~/aosp/.duo-dev/base-tags-fetched` so later runs skip it. Without `--unshallow`, missing tags are only a warning. If a patch still fails after this, its base is not in the project's history and the patch must be regenerated (see 5.5).
 ### 5.2 Build *(not yet validated end to end)*
 
 ```bash
@@ -192,7 +196,7 @@ Useful options (`dev/build.sh --help`):
 | `--ota-url URL` | updater feed to bake in (https only; Archfx URLs are refused) |
 | `--reset-patches` | abort a stuck `git am`, force patched projects back to their manifest revision (discarding tracked changes in them) and re-apply all patches |
 | `--patch-only` | apply patches and generate makefiles, then stop |
-| `--unshallow` | fetch full history for shallow patched projects before applying patches |
+| `--unshallow` | fetch full history and the `android-16.0.0_r*` tags for patched projects before applying patches |
 | `--skip-treble-app` | keep the TrebleApp already in `vendor/hardware_overlay` |
 | `--no-installclean` | skip `make installclean` for faster incremental builds |
 | `--artifacts-dir DIR` | write results elsewhere |
@@ -215,7 +219,20 @@ git ls-remote https://github.com/Archfx/duoPosture refs/heads/main
 
 Keep the resolution date in the file's header current, re-run `dev/podman.sh sync`, then build.
 
-### 5.5 Testing the developer scripts
+### 5.5 Checking that the patch series applies
+
+After changing patches (for example after a TrebleDroid sync, or when moving to a new AOSP tag), check the whole series against a clean tree:
+
+```bash
+~/duo-de/dev/podman.sh shell ~/aosp
+~/duo-de/dev/check-apply.sh --unshallow ~/aosp    # inside the container
+```
+
+`dev/check-apply.sh` force-checks-out every patched project at its manifest revision (discarding tracked changes and patch commits in those projects only, like `--reset-patches`), then applies the `trebledroid`, `personal` and `duo` sets in upstream order with `git am -3`. It does not stop at the first failure: a failing patch is aborted and reported, the rest of that project's patches are skipped, and the other projects continue. It ends with a summary and exits 1 if anything failed. `--restore` returns the patched projects to their manifest revision afterwards; `dev/build.sh` re-applies the patches itself on its next run.
+
+To fix a failing patch, apply it by hand in that project (`git am -3`, resolve, `git am --continue`, or re-create the change), regenerate it with `git format-patch -1` into the same file name, and re-run the check.
+
+### 5.6 Testing the developer scripts
 
 After changing anything in `dev/`, run the mock tests. They use small synthetic Git repositories and stubbed `repo`/`lunch`/`make` in a temporary directory, and need no Android tree, network or container:
 
@@ -223,7 +240,7 @@ After changing anything in `dev/`, run the mock tests. They use small synthetic 
 ~/duo-de/dev/tests/run.sh
 ```
 
-### 5.6 Copying the image to Windows
+### 5.7 Copying the image to Windows
 
 ```bash
 cp ~/aosp/duo-dev-artifacts/<build-id>/system-*.img* /mnt/c/Users/<you>/Downloads/
