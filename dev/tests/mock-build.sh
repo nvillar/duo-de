@@ -119,3 +119,32 @@ grep -q -- '^--cgroup-manager=cgroupfs --events-backend=file run .*--userns=keep
 : > "$PODMAN_LOG"
 DUO_DEV_CGROUP_MANAGER=default DUO_DEV_EVENTS_BACKEND=default bash "$H/dev/podman.sh" build "$T/tree" </dev/null >/dev/null 2>&1
 grep -q '^run ' "$PODMAN_LOG" && echo "PASS podman.sh global options can be disabled" || { echo FAIL; cat "$PODMAN_LOG"; }
+# Regression (baseline run): interrupted checkouts (all files staged for deletion).
+mk_aosp() { # path [local-commit]
+    mkdir -p "$T/tree/$1"; git -C "$T/tree/$1" init -q
+    seq 1 5 > "$T/tree/$1/Android.bp"; git -C "$T/tree/$1" add -A; git -C "$T/tree/$1" commit -qm base
+    git -C "$T/tree/$1" update-ref refs/remotes/m/android-16.0.0_r4 HEAD
+    [ -z "${2:-}" ] || git -C "$T/tree/$1" commit -q --allow-empty -m local
+    git -C "$T/tree/$1" -c advice.detachedHead=false checkout -q --detach
+}
+mk_aosp development; mk_aosp developers/build
+printf '%s\n' frameworks/base build/make device/phh/treble vendor/hardware_overlay vendor/gapps system/core system/extras development developers/build > "$T/tree/.repo/project.list"
+# The mid-build tests above left a stray commit in frameworks/base.
+bash "$H/dev/build.sh" --skip-treble-app --reset-patches --label ok1 "$T/tree" >/dev/null 2>&1 && echo "PASS checkout check passes on a clean tree"
+git -C "$T/tree/development" rm -q -r .
+if bash "$H/dev/build.sh" --skip-treble-app --label broken "$T/tree" 2>"$T/co.err" >/dev/null; then echo "FAIL broken checkout accepted"; else
+    grep -q "^  development$" "$T/co.err" && grep -q "reset --hard HEAD" "$T/co.err" && echo "PASS broken checkout refused with repair instructions"; fi
+bash "$H/dev/build.sh" --skip-treble-app --repair-checkouts --label repaired "$T/tree" >/dev/null 2>&1 \
+    && git -C "$T/tree/development" diff --cached --quiet && [ -f "$T/tree/development/Android.bp" ] && echo "PASS --repair-checkouts restores the checkout"
+# A project with a local commit is not reset.
+git -C "$T/tree/developers/build" commit -q --allow-empty -m local
+git -C "$T/tree/developers/build" rm -q -r .
+if bash "$H/dev/build.sh" --skip-treble-app --repair-checkouts "$T/tree" 2>"$T/co.err" >/dev/null; then echo "FAIL repaired project with local commits"; else
+    grep -q "not repairing 1 projects" "$T/co.err" && ! [ -f "$T/tree/developers/build/Android.bp" ] && echo "PASS --repair-checkouts leaves projects with local commits alone"; fi
+git -C "$T/tree/developers/build" reset -q --hard HEAD
+# Patch targets are left to the patch logic, not the checkout repair.
+echo staged >> "$T/tree/build/make/file.txt"; git -C "$T/tree/build/make" add file.txt
+H0=$(git -C "$T/tree/build/make" rev-parse HEAD)
+bash "$H/dev/build.sh" --skip-treble-app --repair-checkouts --patch-only "$T/tree" >/dev/null 2>&1 || true
+! git -C "$T/tree/build/make" diff --cached --quiet && [ "$(git -C "$T/tree/build/make" rev-parse HEAD)" == "$H0" ] && echo "PASS --repair-checkouts does not touch patch targets"
+git -C "$T/tree/build/make" reset -q --hard HEAD
