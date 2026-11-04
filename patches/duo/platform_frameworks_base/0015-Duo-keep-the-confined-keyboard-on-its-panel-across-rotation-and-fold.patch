@@ -1,0 +1,106 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Nicolas Villar <15879262+nvillar@users.noreply.github.com>
+Date: Wed, 4 Nov 2026 02:39:14 -0800
+Subject: [PATCH 2/3] Duo: keep the confined keyboard on its panel across
+ rotation and fold
+
+The IME container took its panel bounds only in setImeLayeringTarget(), which returns early while the layering target
+(and input target) stay the same. An activity that handles configuration changes keeps its window across a rotation
+or a fold, so the keyboard kept the old panel rect, for example [1434,0][2784,1800] after folding to a 1350 wide
+display. The IME surface parent also depends on the confinement (a confined IME is not attached to the app) but was
+not re-evaluated when only the confinement changed.
+
+- DisplayContent.onConfigurationChanged re-confines the IME container to the target task's new bounds before it
+  re-evaluates the IME surface parent.
+- After every visibility pass (DuoDisplayAreaPolicyProvider.updateOrder) the confinement is re-evaluated for the
+  current target; when it changes, DisplayContent.updateImeParent() runs.
+- In setImeLayeringTarget() a confinement change forces the IME parent update.
+
+Follow-up to "Duo: the keyboard takes the width of the panel it types into" and "Duo: keep a confined keyboard
+attached to the display area, not to the app"; does not change their behaviour otherwise.
+
+Not built or run on a device yet; part of the M1 gate prototype.
+
+Co-authored-by: Copilot App <223556219+Copilot@users.noreply.github.com>
+---
+ .../com/android/server/wm/DisplayContent.java |  6 ++++-
+ .../wm/DuoDisplayAreaPolicyProvider.java      | 24 +++++++++++++++++--
+ 2 files changed, 27 insertions(+), 3 deletions(-)
+
+diff --git a/services/core/java/com/android/server/wm/DisplayContent.java b/services/core/java/com/android/server/wm/DisplayContent.java
+index 01bc3db87117..d5cf63ecfea8 100644
+--- a/services/core/java/com/android/server/wm/DisplayContent.java
++++ b/services/core/java/com/android/server/wm/DisplayContent.java
+@@ -2884,6 +2884,9 @@ class DisplayContent extends RootDisplayArea implements WindowManagerPolicy.Disp
+         final int lastWindowingMode = getWindowingMode();
+         super.onConfigurationChanged(newParentConfig);
+         mPinnedTaskController.onPostDisplayConfigurationChanged();
++        // Duo two panel policy: the IME layering target's task may have new bounds (rotation, fold) with an unchanged
++        // target; re-confine the IME container before its surface parent is re-evaluated just below.
++        DuoDisplayAreaPolicyProvider.updateImeBounds(this, mImeWindowsContainer, mImeLayeringTarget);
+         // Update IME parent if needed.
+         updateImeParent();
+ 
+@@ -4415,7 +4418,8 @@ class DisplayContent extends RootDisplayArea implements WindowManagerPolicy.Disp
+         ProtoLog.i(WM_DEBUG_IME, "setImeLayeringTarget %s", target);
+         boolean forceUpdateImeParent = target != mImeLayeringTarget;
+         mImeLayeringTarget = target;
+-        DuoDisplayAreaPolicyProvider.updateImeBounds(this, mImeWindowsContainer, target);
++        // Duo: a change of the IME confinement changes whether the IME may attach to the app; re-evaluate its parent.
++        forceUpdateImeParent |= DuoDisplayAreaPolicyProvider.updateImeBounds(this, mImeWindowsContainer, target);
+ 
+         if (target != null && target.isImeOverlayLayeringTarget()) {
+             mWmService.dispatchImeOverlayLayeringTargetVisibilityChanged(target.mClient.asBinder(),
+diff --git a/services/core/java/com/android/server/wm/DuoDisplayAreaPolicyProvider.java b/services/core/java/com/android/server/wm/DuoDisplayAreaPolicyProvider.java
+index 5e6039314f44..292b5c472d01 100644
+--- a/services/core/java/com/android/server/wm/DuoDisplayAreaPolicyProvider.java
++++ b/services/core/java/com/android/server/wm/DuoDisplayAreaPolicyProvider.java
+@@ -226,6 +226,7 @@ public class DuoDisplayAreaPolicyProvider implements DisplayAreaPolicy.Provider
+      */
+     static void updateOrder(DisplayContent display) {
+         if (!sActive || display == null || !display.isDefaultDisplay) return;
++        refreshImeBounds(display);
+         final TaskDisplayArea home = display.getDefaultTaskDisplayArea();
+         final WindowContainer parent = home == null ? null : home.getParent();
+         if (parent == null) return;
+@@ -277,9 +278,11 @@ public class DuoDisplayAreaPolicyProvider implements DisplayAreaPolicy.Provider
+      * so the keyboard of an app on one panel was laid out 2754 px wide (Gboard picks its wide split layout, the keys run
+      * over the hinge and over the other panel). The IME container takes the bounds of the layering target's task: a
+      * panel task gives a panel wide keyboard, a spanned task (or none) the display wide one.
++     *
++     * @return whether the IME container bounds changed.
+      */
+-    static void updateImeBounds(DisplayContent display, WindowContainer imeContainer, @Nullable WindowState target) {
+-        if (!sActive || imeContainer == null || !display.isDefaultDisplay) return;
++    static boolean updateImeBounds(DisplayContent display, WindowContainer imeContainer, @Nullable WindowState target) {
++        if (!sActive || imeContainer == null || !display.isDefaultDisplay) return false;
+         final Task task = target != null ? target.getTask() : null;
+         final Rect want = new Rect();
+         if (task != null && !task.getBounds().isEmpty() && !task.getBounds().equals(display.getBounds())) {
+@@ -288,6 +291,23 @@ public class DuoDisplayAreaPolicyProvider implements DisplayAreaPolicy.Provider
+         if (!want.equals(imeContainer.getRequestedOverrideBounds())) {
+             Slog.i(TAG, "IME bounds " + want + " for " + target);
+             imeContainer.setBounds(want);
++            return true;
++        }
++        return false;
++    }
++
++    /**
++     * Re-evaluates the IME confinement while the IME layering target stays the same. setImeLayeringTarget() returns
++     * early for an unchanged target, but the target's task can still change bounds: an activity that handles
++     * configuration changes keeps its window across a rotation or a fold, and the keyboard would keep the old panel
++     * rect (for example [1434,0][2784,1800] after folding to a 1350 wide display). Called after every visibility pass;
++     * when the bounds change, the IME surface parent is re-evaluated too, since attaching the IME to the app depends
++     * on the confinement ({@link #isImeConfined}).
++     */
++    static void refreshImeBounds(DisplayContent display) {
++        if (!sActive || display == null || !display.isDefaultDisplay) return;
++        if (updateImeBounds(display, display.getImeContainer(), display.getImeLayeringTarget())) {
++            display.updateImeParent();
+         }
+     }
+ 
+-- 
+2.56.0.windows.4
+
