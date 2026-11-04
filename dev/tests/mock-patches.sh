@@ -1,6 +1,7 @@
 #!/bin/bash
 # Mock test of dev/build.sh patch handling (--patch-only), on synthetic git repos.
 # Usage: dev/tests/mock-patches.sh <harness-root>; run via dev/tests/run.sh.
+# shellcheck disable=SC2015,SC2012
 set -euo pipefail
 SRC="$1"
 T="${DUO_TEST_DIR:?}"
