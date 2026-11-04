@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- DuoProbe: dev-only probe for the Surface Duo dual-panel work. Logs with the tag DuoProbe. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="org.duode.probe">
+
+    <!-- Package visibility: list the launchable apps on the probe home. -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+    </queries>
+
+    <application
+        android:label="Duo probe"
+        android:enableOnBackInvokedCallback="true"
+        android:resizeableActivity="true">
+
+        <!-- Optional: lets the probe log WindowLayoutInfo (display features) without Jetpack. -->
+        <uses-library android:name="androidx.window.extensions" android:required="false" />
+
+        <!-- A HOME activity, so the framework treats launches from it as launches from home. The attributes follow
+             Launcher3's launcher activity. -->
+        <activity
+            android:name=".ProbeHomeActivity"
+            android:label="Duo probe home"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:clearTaskOnLaunch="true"
+            android:stateNotNeeded="true"
+            android:resumeWhilePausing="true"
+            android:taskAffinity=""
+            android:screenOrientation="unspecified"
+            android:windowSoftInputMode="adjustPan"
+            android:configChanges="keyboard|keyboardHidden|mcc|mnc|navigation|orientation|screenSize|screenLayout|smallestScreenSize|density|uiMode">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.HOME" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- An ordinary app activity (no configChanges: it is relaunched like a normal app). -->
+        <activity
+            android:name=".ProbeTestActivity"
+            android:label="Duo probe test"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- Keyguard gate: the same test activity, shown over the lock screen, in its own task. -->
+        <activity
+            android:name=".ProbeLockedTestActivity"
+            android:label="Duo probe locked"
+            android:exported="true"
+            android:showWhenLocked="true"
+            android:taskAffinity="org.duode.probe.locked">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>
