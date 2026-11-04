@@ -50,6 +50,16 @@ duo_require_cmds() {
     [ ${#missing[@]} -eq 0 ] || die "missing required commands: ${missing[*]}"
 }
 
+# Prefer the tree's own repo launcher (.repo/repo/repo, kept current by repo
+# itself) over an older system launcher, which only prints a version warning.
+duo_repo() {
+    if [ -x .repo/repo/repo ]; then
+        .repo/repo/repo "$@"
+    else
+        repo "$@"
+    fi
+}
+
 duo_jobs_default() {
     nproc --all 2>/dev/null || echo 4
 }

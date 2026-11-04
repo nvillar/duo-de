@@ -117,7 +117,7 @@ sync_args=(-c --no-clone-bundle --no-tags "-j$JOBS" "--retry-fetches=$RETRY_FETC
 pause=60
 for ((attempt = 1; ; attempt++)); do
     log "Syncing, attempt $attempt/$ATTEMPTS (repo sync ${sync_args[*]})"
-    repo sync "${sync_args[@]}" && break
+    duo_repo sync "${sync_args[@]}" && break
     [ "$attempt" -lt "$ATTEMPTS" ] || die "repo sync failed $ATTEMPTS times; on HTTP 429 wait and rerun with fewer --jobs"
     warn "repo sync failed (HTTP 429 rate limiting is common); retrying in ${pause}s"
     sleep "$pause"
@@ -125,5 +125,5 @@ for ((attempt = 1; ; attempt++)); do
 done
 
 mkdir -p .duo-dev
-repo manifest -r -o .duo-dev/synced-manifest.xml
+duo_repo manifest -r -o .duo-dev/synced-manifest.xml
 log "Synced. Resolved manifest: $TREE/.duo-dev/synced-manifest.xml"
