@@ -23,6 +23,9 @@
 #   --repair-checkouts   `git reset --hard HEAD` unpatched projects whose index
 #                        differs from HEAD (interrupted checkout) and that have
 #                        no local commits; without it such projects are an error
+#   --with-probe         dev only: copy tools/duo-probe/DuoProbe to
+#                        <aosp-tree>/packages/apps/DuoProbe and add it to the
+#                        untracked duo-dev.mk; a build without it removes both
 #
 # Writes only inside <aosp-tree> and the artifacts directory. Never uploads,
 # never uses release keys, never runs `git clean` or `repo sync`.
@@ -43,9 +46,10 @@ INSTALLCLEAN=true
 PATCH_ONLY=false
 UNSHALLOW=false
 REPAIR_CHECKOUTS=false
+WITH_PROBE=false
 TREE_ARG=""
 
-usage() { sed -n '2,30p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,33p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -60,6 +64,7 @@ while [ $# -gt 0 ]; do
         --patch-only) PATCH_ONLY=true; shift ;;
         --unshallow) UNSHALLOW=true; shift ;;
         --repair-checkouts) REPAIR_CHECKOUTS=true; shift ;;
+        --with-probe) WITH_PROBE=true; shift ;;
         -h|--help) usage; exit 0 ;;
         -*) die "unknown option $1 (see --help)" ;;
         *) [ -z "$TREE_ARG" ] || die "only one <aosp-tree> allowed"; TREE_ARG="$1"; shift ;;
@@ -275,12 +280,55 @@ for p in ET.parse(sys.argv[1]).getroot().iter("project"):
 PY
 )
 
+# ---------------------------------------------------------------- DuoProbe (dev only)
+
+# --with-probe copies the probe app into the tree and names it only in the
+# untracked duo-dev.mk; release makefiles (build/aosp.mk) never mention it.
+# packages/apps/DuoProbe belongs to no repo project, so the copy carries a
+# marker file, and a build without --with-probe removes it again. A directory
+# there without the marker is not ours and is never touched.
+PROBE_SRC="$HARNESS/tools/duo-probe/DuoProbe"
+PROBE_DST="packages/apps/DuoProbe"
+PROBE_MARKER=".duo-dev-managed"
+PROBE_STATUS="not included"
+PROBE_SHA256="none"
+probe_hash() {
+    (cd -- "$1" && LC_ALL=C find . -type f ! -name "$PROBE_MARKER" -print0 | LC_ALL=C sort -z \
+        | xargs -0r sha256sum) | sha256sum | cut -d' ' -f1
+}
+stage_probe() {
+    if [ -e "$PROBE_DST" ] && [ ! -f "$PROBE_DST/$PROBE_MARKER" ]; then
+        die "$PROBE_DST exists and was not created by dev/build.sh --with-probe; move it out of the tree"
+    fi
+    if ! $WITH_PROBE; then
+        if [ -e "$PROBE_DST" ]; then
+            log "Removing $PROBE_DST (no --with-probe)"
+            rm -rf -- "$PROBE_DST"
+        fi
+        return
+    fi
+    [ -f "$PROBE_SRC/Android.bp" ] || die "$PROBE_SRC/Android.bp not found"
+    PROBE_SHA256="$(probe_hash "$PROBE_SRC")"
+    # Only replace a changed copy, so an unchanged probe keeps its timestamps.
+    if [ ! -d "$PROBE_DST" ] || [ "$(probe_hash "$PROBE_DST")" != "$PROBE_SHA256" ]; then
+        log "Copying DuoProbe to $PROBE_DST (dev build only)"
+        rm -rf -- "$PROBE_DST" "$PROBE_DST.tmp"
+        mkdir -p -- "$(dirname -- "$PROBE_DST")"
+        cp -R -- "$PROBE_SRC" "$PROBE_DST.tmp"
+        echo "Copied by DUO-DE dev/build.sh --with-probe from $HARNESS_COMMIT; removed by a build without it." \
+            > "$PROBE_DST.tmp/$PROBE_MARKER"
+        mv -- "$PROBE_DST.tmp" "$PROBE_DST"
+    fi
+    PROBE_STATUS="included ($PROBE_DST; PRODUCT_PACKAGES += DuoProbe in $DEV_MK only)"
+}
+
 # ---------------------------------------------------------------- makefiles
 
 # Same content as build/aosp.mk (which build.sh copies over device/phh/treble/aosp.mk),
 # with the updater URL replaced. Kept in a separate untracked file so that the
 # device/phh/treble project stays clean.
 DEV_MK="device/phh/treble/duo-dev.mk"
+stage_probe
 generate_makefiles() {
     local tmp f
     log "Generating product makefiles (updater feed: $OTA_URL)"
@@ -296,6 +344,13 @@ generate_makefiles() {
         echo "# DUO-DE developer build marker"
         echo "PRODUCT_SYSTEM_DEFAULT_PROPERTIES += \\"
         echo "    ro.duode.dev_build=true"
+        if $WITH_PROBE; then
+            echo
+            echo "# DEV ONLY (dev/build.sh --with-probe): DuoProbe feasibility probe app"
+            echo "PRODUCT_PACKAGES += DuoProbe"
+            echo "PRODUCT_SYSTEM_DEFAULT_PROPERTIES += \\"
+            echo "    ro.duode.dev_probe=true"
+        fi
     } > "$tmp/duo-dev.mk"
     (cd -- "$tmp" && bash "$TREE/device/phh/treble/generate.sh" "$DEV_MK" >/dev/null)
     # Only replace changed files, so unchanged makefiles keep their timestamps.
@@ -351,6 +406,7 @@ tree_snapshot() {
     sha256sum ${GEN_MAKEFILES_GLOB[@]} | sed 's/^/makefile /'
     printf 'trebleapp %s\n' "$(sha256sum vendor/hardware_overlay/TrebleApp/app.apk | cut -d' ' -f1)"
     printf 'local_manifests %s\n' "$(cat .repo/local_manifests/*.xml 2>/dev/null | sha256sum | cut -d' ' -f1)"
+    if [ -d "$PROBE_DST" ]; then printf 'probe %s\n' "$(probe_hash "$PROBE_DST")"; else echo "probe none"; fi
 }
 # Projects with local changes, ignoring the files this script manages itself.
 dirty_projects() {
@@ -420,6 +476,13 @@ IMG_OTA_URL="$(prop ro.system.ota.json_url)"
 [[ "$FINGERPRINT" == *"$BUILD_TAG"* ]] || die "fingerprint '$FINGERPRINT' does not contain $BUILD_TAG"
 if grep -qi archfx "${PROP_FILES[0]}"; then
     die "system build.prop still references Archfx"
+fi
+PROBE_APK="$OUT/system/app/DuoProbe/DuoProbe.apk"
+if $WITH_PROBE; then
+    [ -f "$PROBE_APK" ] || die "--with-probe: $PROBE_APK was not produced"
+    PROBE_STATUS+="; apk_sha256 $(sha256sum "$PROBE_APK" | cut -d' ' -f1)"
+elif [ -e "$OUT/system/app/DuoProbe" ]; then
+    die "$OUT/system/app/DuoProbe is left over from a --with-probe build; rebuild without --no-installclean"
 fi
 
 # The tree must not have changed while building (e.g. a concurrent sync).
@@ -515,6 +578,8 @@ gapps_project_present: $GAPPS_PRESENT
 treble_app: $TREBLE_APP_STATUS
 treble_app_apk_sha256: $TREBLE_APP_SHA256
 projects_with_uncommitted_changes: $DIRTY_PROJECTS
+duo_probe: $PROBE_STATUS
+duo_probe_source_sha256: $PROBE_SHA256
 tree_unchanged_during_build: verified
 
 aosp_manifest_branch: $(git config --file .repo/manifests.git/config --get branch.default.merge || echo unknown)

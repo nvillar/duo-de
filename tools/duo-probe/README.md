@@ -66,17 +66,17 @@ The app is unprivileged and test-key signed, so it installs on the released imag
 adb install -r "$OUT/system/app/DuoProbe/DuoProbe.apk"
 ```
 
-### Option 2: include it in a dev system image (PRODUCT_PACKAGES hook)
+### Option 2: include it in a dev system image (`dev/build.sh --with-probe`)
 
-Only in the dev tree's generated product makefile (`device/phh/treble/aosp.mk`, copied from `build/aosp.mk` by
-`applyPatches` in `build.sh`), append after the patches are applied:
+The developer build harness does this for you, only in the dev tree and only for that build:
 
-```make
-# DEV ONLY - never commit to build/aosp.mk
-PRODUCT_PACKAGES += DuoProbe
+```sh
+dev/podman.sh build ~/aosp --with-probe --label m1gate
 ```
 
-then build the image as usual. Remove the line (or start from a clean dev tree) before any other build.
+It copies `DuoProbe` to `packages/apps/DuoProbe` and adds `PRODUCT_PACKAGES += DuoProbe` to the untracked, generated
+`device/phh/treble/duo-dev.mk`; `provenance.txt` records it (`duo_probe:`). The next build without `--with-probe`
+removes both. Never add the module to `build/aosp.mk` or any tracked makefile.
 
 ## Using it on the device
 

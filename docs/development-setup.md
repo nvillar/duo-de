@@ -199,6 +199,7 @@ Useful options (`dev/build.sh --help`):
 | `--repair-checkouts` | `git reset --hard HEAD` broken checkouts in unpatched projects without local commits (see 5.8) |
 | `--unshallow` | fetch full history and the `android-16.0.0_r*` tags for patched projects before applying patches |
 | `--skip-treble-app` | keep the TrebleApp already in `vendor/hardware_overlay` |
+| `--with-probe` | dev images only: copy `tools/duo-probe/DuoProbe` to `packages/apps/DuoProbe` (with a `.duo-dev-managed` marker) and add `PRODUCT_PACKAGES += DuoProbe` and `ro.duode.dev_probe=true` to the untracked `duo-dev.mk`. Recorded as `duo_probe` in `provenance.txt`. A later build without it removes the copy and the makefile lines; an unmarked `packages/apps/DuoProbe` is refused, never overwritten. Release makefiles (`build/aosp.mk`) never name the probe |
 | `--no-installclean` | skip `make installclean` for faster incremental builds |
 | `--artifacts-dir DIR` | write results elsewhere |
 

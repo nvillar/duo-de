@@ -23,7 +23,11 @@ make() {
   case "$*" in *systemimage*)
     mkdir -p "$OUT/system"
     printf 'ro.system.build.fingerprint=google/treble_arm64_bvN/tdgsi_arm64_ab:16/BP2A/%s:userdebug/test-keys\nro.system.build.tags=test-keys\nro.system.ota.json_url=%s\n' "$BUILD_NUMBER" "${FAKE_URL:-https://ota-disabled.invalid/duo-de-dev/ota.json}" > "$OUT/system/build.prop"
-    head -c 1048576 /dev/urandom > "$OUT/system.img";;
+    head -c 1048576 /dev/urandom > "$OUT/system.img"
+    # Like installclean + PRODUCT_PACKAGES: the probe apk exists only when duo-dev.mk names it.
+    if grep -q '^PRODUCT_PACKAGES += DuoProbe' device/phh/treble/duo-dev.mk 2>/dev/null; then
+      mkdir -p "$OUT/system/app/DuoProbe"; echo apk > "$OUT/system/app/DuoProbe/DuoProbe.apk"
+    else rm -rf "$OUT/system/app/DuoProbe"; fi;;
   esac
 }
 EOF
@@ -148,3 +152,22 @@ H0=$(git -C "$T/tree/build/make" rev-parse HEAD)
 bash "$H/dev/build.sh" --skip-treble-app --repair-checkouts --patch-only "$T/tree" >/dev/null 2>&1 || true
 ! git -C "$T/tree/build/make" diff --cached --quiet && [ "$(git -C "$T/tree/build/make" rev-parse HEAD)" == "$H0" ] && echo "PASS --repair-checkouts does not touch patch targets"
 git -C "$T/tree/build/make" reset -q --hard HEAD
+# M1 gate: --with-probe stages DuoProbe for a dev image only.
+mkdir -p "$H/tools/duo-probe/DuoProbe"; echo 'android_app { name: "DuoProbe" }' > "$H/tools/duo-probe/DuoProbe/Android.bp"
+git -C "$H" add -A; git -C "$H" commit -qm probe
+bash "$H/dev/build.sh" --skip-treble-app --with-probe --label withprobe "$T/tree" >/dev/null 2>"$T/probe.err" || cat "$T/probe.err"
+A=$(ls -d "$T/tree/duo-dev-artifacts/"*withprobe 2>/dev/null | head -n1)
+[ -f "$T/tree/packages/apps/DuoProbe/Android.bp" ] && [ -f "$T/tree/packages/apps/DuoProbe/.duo-dev-managed" ] \
+    && grep -q '^PRODUCT_PACKAGES += DuoProbe' "$T/tree/device/phh/treble/duo-dev.mk" \
+    && grep -q '^duo_probe: included' "$A/provenance.txt" && grep -q '^duo_probe: .*apk_sha256 [0-9a-f]\{64\}' "$A/provenance.txt" \
+    && echo "PASS --with-probe stages DuoProbe through duo-dev.mk" || echo "FAIL --with-probe"
+grep -rq DuoProbe "$H/build" && echo "FAIL a release makefile names DuoProbe" || echo "PASS release makefiles never name DuoProbe"
+bash "$H/dev/build.sh" --skip-treble-app --label noprobe "$T/tree" >/dev/null 2>"$T/probe.err" || cat "$T/probe.err"
+A=$(ls -d "$T/tree/duo-dev-artifacts/"*noprobe 2>/dev/null | head -n1)
+[ ! -e "$T/tree/packages/apps/DuoProbe" ] && ! grep -q DuoProbe "$T/tree/device/phh/treble/duo-dev.mk" \
+    && grep -q '^duo_probe: not included' "$A/provenance.txt" \
+    && echo "PASS a build without --with-probe removes it" || echo "FAIL probe removal"
+mkdir -p "$T/tree/packages/apps/DuoProbe"; echo mine > "$T/tree/packages/apps/DuoProbe/Android.bp"
+if bash "$H/dev/build.sh" --skip-treble-app --with-probe --patch-only "$T/tree" >/dev/null 2>&1; then echo "FAIL foreign DuoProbe accepted"; else
+    grep -q mine "$T/tree/packages/apps/DuoProbe/Android.bp" && echo "PASS a foreign packages/apps/DuoProbe is left alone"; fi
+rm -rf "$T/tree/packages"
