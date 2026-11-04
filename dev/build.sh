@@ -107,31 +107,6 @@ PATCH_ROOT="$STATE_DIR/patchroot"
 declare -a PROJECT_PATHS=()   # unique tree paths touched by the included patches
 declare -A SEEN=()
 
-# Build a filtered view of patches/ (symlinks) and compute the patch-set hash.
-prepare_patch_root() {
-    local set dir proj path
-    rm -rf -- "$PATCH_ROOT"
-    for set in "${DUO_PATCH_SETS[@]}"; do
-        mkdir -p "$PATCH_ROOT/patches/$set"
-        for dir in "$HARNESS/patches/$set"/*/; do
-            proj="$(basename -- "$dir")"
-            path="$(duo_project_path "$proj")"
-            if [ ! -d "$path" ]; then
-                if [ "$path" == vendor/gapps ]; then
-                    log "  $set/$proj: vendor/gapps not in tree, skipping (vanilla build)"
-                    continue
-                fi
-                die "patch project $set/$proj maps to '$path', which is missing from the tree"
-            fi
-            ln -s -- "${dir%/}" "$PATCH_ROOT/patches/$set/$proj"
-            if [ -z "${SEEN[$path]:-}" ]; then
-                SEEN[$path]=1
-                PROJECT_PATHS+=("$path")
-            fi
-        done
-    done
-}
-
 patchset_hash() {
     local set
     {
@@ -143,66 +118,10 @@ patchset_hash() {
     } | sha256sum | cut -d' ' -f1
 }
 
-proj_head() { git -C "$1" rev-parse --verify -q HEAD; }
-
-# Commit the manifest checked out for a project (repo's refs/remotes/m/<branch>).
-proj_base() {
-    local refs ref
-    refs="$(git -C "$1" for-each-ref --format='%(refname)' refs/remotes/m/)"
-    if [ "$(grep -c . <<<"$refs")" -eq 1 ]; then
-        ref="$refs"
-    elif grep -qx "refs/remotes/m/$DUO_AOSP_BRANCH" <<<"$refs"; then
-        ref="refs/remotes/m/$DUO_AOSP_BRANCH"
-    else
-        die "$1: cannot determine the manifest revision (refs/remotes/m/*: ${refs:-none})"
-    fi
-    git -C "$1" rev-parse --verify -q "$ref^{commit}" || die "$1: cannot resolve $ref"
-}
-
-am_in_progress() { (cd -- "$1" && [ -d "$(git rev-parse --git-path rebase-apply)" ]); }
-
 state_get() { [ -f "$STATE_FILE" ] && awk -v k="$1" '$1 == k { print $2; exit }' "$STATE_FILE"; }
 state_head() { [ -f "$STATE_FILE" ] && awk -v p="$1" '$1 == "project" && $2 == p { print $4; exit }' "$STATE_FILE"; }
 # Manifest revision the project's patches were applied on top of.
 state_base() { [ -f "$STATE_FILE" ] && awk -v p="$1" '$1 == "project" && $2 == p { print $3; exit }' "$STATE_FILE"; }
-
-is_shallow() { [ "$(git -C "$1" rev-parse --is-shallow-repository)" == true ]; }
-
-# git am -3 falls back to a 3-way merge using the blobs named in each patch;
-# a shallow (--depth=1) checkout usually lacks them ("sha1 information is
-# lacking or useless"). Patched projects therefore need full history.
-ensure_full_history() {
-    local p shallow=() remote base attempt pause
-    for p in "${PROJECT_PATHS[@]}"; do
-        if is_shallow "$p"; then shallow+=("$p"); fi
-    done
-    [ ${#shallow[@]} -gt 0 ] || return 0
-    if ! $UNSHALLOW; then
-        printf '  %s\n' "${shallow[@]}" >&2
-        die "${#shallow[@]} patched projects are shallow clones; rerun with --unshallow (fetches their full history) or see docs/development-setup.md"
-    fi
-    log "Fetching full history for ${#shallow[@]} shallow patched projects"
-    for p in "${shallow[@]}"; do
-        remote="$(git -C "$p" remote | head -n1)"
-        [ -n "$remote" ] || die "$p has no git remote to unshallow from"
-        base="$(proj_base "$p")"
-        pause=30
-        for ((attempt = 1; ; attempt++)); do
-            log "  $p ($remote, attempt $attempt/4)"
-            if git -C "$p" fetch -q --unshallow --no-tags "$remote" "$base" && ! is_shallow "$p"; then
-                break
-            fi
-            # Fall back to the remote's configured refspec.
-            if ! is_shallow "$p" || { git -C "$p" fetch -q --unshallow --no-tags "$remote" && ! is_shallow "$p"; }; then
-                break
-            fi
-            [ "$attempt" -lt 4 ] || die "could not unshallow $p (HTTP 429 rate limiting? wait and rerun)"
-            warn "unshallowing $p failed; retrying in ${pause}s"
-            sleep "$pause"
-            pause=$((pause * 2))
-        done
-    done
-}
 
 apply_patches() {
     local want p head base rec
@@ -231,7 +150,7 @@ apply_patches() {
         fi
     fi
 
-    ensure_full_history
+    duo_prepare_history "$UNSHALLOW" "${PROJECT_PATHS[@]}"
 
     log "Preparing ${#PROJECT_PATHS[@]} projects"
     for p in "${PROJECT_PATHS[@]}"; do
@@ -266,7 +185,7 @@ apply_patches() {
             for p in "${PROJECT_PATHS[@]}"; do
                 am_in_progress "$p" && warn "unfinished 'git am' in $p"
             done
-            die "patch set '$set' failed to apply (see above). Fix the patch, then rerun with --reset-patches"
+            die "patch set '$set' failed to apply (see above). If git am could not build a fake ancestor, rerun with --reset-patches --unshallow (full history and base tags); otherwise fix the patch (dev/check-apply.sh lists all failures)"
         fi
     done
 
