@@ -1,0 +1,145 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Nicolas Villar <15879262+nvillar@users.noreply.github.com>
+Date: Wed, 4 Nov 2026 02:18:41 -0800
+Subject: [PATCH] Duo: restore a task minimized by Home whatever the launch
+ routing decides
+
+Home on a panel hid the panel's tasks with the task organizer's hidden reason, and only two places showed them again:
+the end of panelForLaunch (after every early return, so not in a single panel posture, for a launch without source
+bounds or from a non home caller) and moving a task to front inside a panel area. After a fold to a single panel a
+relaunched app was reparented to the default task area, still hidden, and nothing was shown. Both places also cleared
+FLAG_FORCE_HIDDEN_FOR_TASK_ORG, which belongs to Shell's task organizer.
+
+- The policy hides with its own reason, FLAG_FORCE_HIDDEN_FOR_DUO_PANEL, and only ever clears that reason.
+- panelForLaunch restores the launched task first, before any routing decision, so the destination does not matter.
+- Moving a task to front restores it in any task display area, not only in a panel.
+- panelForLaunch leaves launches from an activity on another display alone (a home on an external display passes
+  no display id), so explicit and external display launches keep the platform choice.
+
+Not built or run on a device yet; part of the M1 gate prototype.
+
+Co-authored-by: Copilot App <223556219+Copilot@users.noreply.github.com>
+---
+ .../wm/DuoDisplayAreaPolicyProvider.java      | 33 +++++++++++++++----
+ .../android/server/wm/TaskDisplayArea.java    |  9 ++---
+ .../com/android/server/wm/TaskFragment.java   |  6 ++++
+ 3 files changed, 37 insertions(+), 11 deletions(-)
+
+diff --git a/services/core/java/com/android/server/wm/DuoDisplayAreaPolicyProvider.java b/services/core/java/com/android/server/wm/DuoDisplayAreaPolicyProvider.java
+index 323e4d03f9fe..e67788b9d839 100644
+--- a/services/core/java/com/android/server/wm/DuoDisplayAreaPolicyProvider.java
++++ b/services/core/java/com/android/server/wm/DuoDisplayAreaPolicyProvider.java
+@@ -99,8 +99,9 @@ public class DuoDisplayAreaPolicyProvider implements DisplayAreaPolicy.Provider
+     /**
+      * Home on a panel: hides every root task of the panel that holds the focused root task, so home (which is
+      * transparent where it has no icon) shows through on that panel only and the other panel keeps its app. Hidden
+-     * tasks are not drawn and their activities stop, as after Home on a phone. A task launched or moved to front in
+-     * the panel clears the flag again (see TaskDisplayArea.positionChildTaskAt).
++     * tasks are not drawn and their activities stop, as after Home on a phone. The policy hides with its own reason,
++     * {@link TaskFragment#FLAG_FORCE_HIDDEN_FOR_DUO_PANEL}, and only ever clears that reason (see
++     * {@link #restoreHiddenByPolicy}); a task organizer's hidden state is never touched.
+      */
+     /** True while a touch (or setFocusedTask) is only moving focus to a window, which is not a Home action. */
+     private static boolean sFocusChange;
+@@ -135,7 +136,7 @@ public class DuoDisplayAreaPolicyProvider implements DisplayAreaPolicy.Provider
+             if (transitions.isCollecting()) {
+                 transitions.collect(tasks.get(i));
+             }
+-            tasks.get(i).setForceHidden(Task.FLAG_FORCE_HIDDEN_FOR_TASK_ORG, true /* set */);
++            tasks.get(i).setForceHidden(Task.FLAG_FORCE_HIDDEN_FOR_DUO_PANEL, true /* set */);
+         }
+         // Hiding a task only takes effect (activities stop, surfaces go away) in a visibility pass, which the Home
+         // start has already done or skips; run one right after, outside the current call chain.
+@@ -147,6 +148,23 @@ public class DuoDisplayAreaPolicyProvider implements DisplayAreaPolicy.Provider
+         });
+     }
+ 
++    /**
++     * Shows a task that Home minimized again. Clears only the policy's own hidden reason, so a task that a task
++     * organizer (Shell) or PiP hides stays hidden. Safe to call for any task, wherever it lives now: a reused task may
++     * have left its panel (for example reparented to the default area after a fold to a single panel) and must not
++     * stay invisible there.
++     *
++     * @return whether the task was hidden by the policy and is now restored.
++     */
++    static boolean restoreHiddenByPolicy(@Nullable Task task) {
++        final Task root = task != null ? task.getRootTask() : null;
++        if (root == null || !root.setForceHidden(Task.FLAG_FORCE_HIDDEN_FOR_DUO_PANEL, false /* set */)) {
++            return false;
++        }
++        Slog.i(TAG, "Restored minimized " + root);
++        return true;
++    }
++
+     /**
+      * The panel a launch should go to, from where the user tapped. A launcher passes the on-screen rectangle of the
+      * tapped icon as the intent's source bounds; the panel containing it gets the new task, so an icon on the left
+@@ -158,7 +176,12 @@ public class DuoDisplayAreaPolicyProvider implements DisplayAreaPolicy.Provider
+     @Nullable
+     static TaskDisplayArea panelForLaunch(DisplayContent dc, @Nullable ActivityRecord source,
+             @Nullable ActivityRecord record, @Nullable Task existingTask) {
++        // A minimized task that is launched again comes back whatever the routing decides below: an early return (single
++        // panel posture, no source bounds, non home caller) or another destination must not leave it invisible.
++        restoreHiddenByPolicy(existingTask);
+         if (!sActive || dc == null || record == null || record.intent == null) return null;
++        // Only launches from the default display are routed to its panels; a home on another display keeps its display.
++        if (source != null && source.getDisplayContent() != dc) return null;
+         // An app that already has a task is moved to / kept on the tapped panel; without this the platform falls back
+         // to the launcher's task area and pulls the task out of its panel into the spanned area.
+         if (existingTask != null && !existingTask.isActivityTypeStandard()) return null;
+@@ -185,10 +208,6 @@ public class DuoDisplayAreaPolicyProvider implements DisplayAreaPolicy.Provider
+         final TaskDisplayArea target = in0 != in1 ? (in0 ? first : second)
+                 // On the hinge or outside both: the nearer panel
+                 : (distance(b0, x, y) <= distance(b1, x, y) ? first : second);
+-        if (existingTask != null && existingTask.isForceHidden()) {
+-            // a minimized app launched again comes back
+-            existingTask.setForceHidden(Task.FLAG_FORCE_HIDDEN_FOR_TASK_ORG, false /* set */);
+-        }
+         return target;
+     }
+ 
+diff --git a/services/core/java/com/android/server/wm/TaskDisplayArea.java b/services/core/java/com/android/server/wm/TaskDisplayArea.java
+index 3167d39aa731..76409f35513d 100644
+--- a/services/core/java/com/android/server/wm/TaskDisplayArea.java
++++ b/services/core/java/com/android/server/wm/TaskDisplayArea.java
+@@ -369,10 +369,11 @@ final class TaskDisplayArea extends DisplayArea<WindowContainer> {
+             includingParents = false;
+             DuoDisplayAreaPolicyProvider.minimizeFocusedPanel(mDisplayContent);
+         }
+-        if (moveToTop && child.isForceHidden()
+-                && getRootDisplayArea() instanceof DuoDisplayAreaPolicyProvider.PanelGroup) {
+-            // Duo two panel policy: bringing a minimized task back to front shows it on its panel again.
+-            child.setForceHidden(Task.FLAG_FORCE_HIDDEN_FOR_TASK_ORG, false /* set */);
++        if (moveToTop) {
++            // Duo two panel policy: bringing a task minimized by Home back to front shows it again, in whichever task
++            // area it now lives (not only in a panel: a reused task can be reparented to the default area). Clears
++            // only the policy's own hidden reason; a no-op for every other task.
++            DuoDisplayAreaPolicyProvider.restoreHiddenByPolicy(child);
+         }
+         final int targetPosition = findPositionForRootTask(position, child, false /* adding */);
+         super.positionChildAt(targetPosition, child, false /* includingParents */);
+diff --git a/services/core/java/com/android/server/wm/TaskFragment.java b/services/core/java/com/android/server/wm/TaskFragment.java
+index 6ee790889d59..578962be28ac 100644
+--- a/services/core/java/com/android/server/wm/TaskFragment.java
++++ b/services/core/java/com/android/server/wm/TaskFragment.java
+@@ -408,11 +408,17 @@ class TaskFragment extends WindowContainer<WindowContainer> {
+     static final int FLAG_FORCE_HIDDEN_FOR_PINNED_TASK = 1;
+     static final int FLAG_FORCE_HIDDEN_FOR_TASK_ORG = 1 << 1;
+     static final int FLAG_FORCE_HIDDEN_FOR_TASK_FRAGMENT_ORG = 1 << 2;
++    /**
++     * Duo two panel policy: a root task minimized by Home on its panel. Owned by DuoDisplayAreaPolicyProvider, which
++     * sets and clears only this bit, separately from the task organizer's reason.
++     */
++    static final int FLAG_FORCE_HIDDEN_FOR_DUO_PANEL = 1 << 3;
+ 
+     @IntDef(prefix = {"FLAG_FORCE_HIDDEN_"}, value = {
+             FLAG_FORCE_HIDDEN_FOR_PINNED_TASK,
+             FLAG_FORCE_HIDDEN_FOR_TASK_ORG,
+             FLAG_FORCE_HIDDEN_FOR_TASK_FRAGMENT_ORG,
++            FLAG_FORCE_HIDDEN_FOR_DUO_PANEL,
+     }, flag = true)
+     @interface FlagForceHidden {}
+     protected int mForceHiddenFlags = 0;
+-- 
+2.56.0.windows.4
+
