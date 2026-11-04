@@ -1,0 +1,68 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Nicolas Villar <15879262+nvillar@users.noreply.github.com>
+Date: Wed, 4 Nov 2026 02:19:44 -0800
+Subject: [PATCH] Duo: launch apps fullscreen while the two panel window policy
+ is on
+
+The Duo-DE launch options ask for a freeform window with explicit launch bounds on a tablet sized profile
+(allow_freeform_mode_tablet, on by default). With the framework's two panel policy on, the framework opens a launched
+app fullscreen in the panel that was tapped; a freeform request with bounds fights that routing. While the policy is on
+(persist.sys.phh.duo.panels or persist.debug.phh.duo.panels on a Duo), launch fullscreen and leave the panel choice to
+the framework. With the policy off nothing changes.
+
+Not built or run on a device yet; part of the M1 gate prototype.
+
+Co-authored-by: Copilot App <223556219+Copilot@users.noreply.github.com>
+---
+ .../launcher3/util/ActivityOptionsWrapper.java       |  4 ++++
+ src/com/android/launcher3/util/DuoPanels.java        | 12 ++++++++++++
+ 2 files changed, 16 insertions(+)
+
+diff --git a/src/com/android/launcher3/util/ActivityOptionsWrapper.java b/src/com/android/launcher3/util/ActivityOptionsWrapper.java
+index 1a4fc5141d..5b58fedd68 100644
+--- a/src/com/android/launcher3/util/ActivityOptionsWrapper.java
++++ b/src/com/android/launcher3/util/ActivityOptionsWrapper.java
+@@ -90,6 +90,10 @@ public class ActivityOptionsWrapper {
+             }
+         }
+ 
++        // Duo two panel policy: the framework opens the app fullscreen in the panel that was tapped. A freeform request
++        // with launch bounds would fight that routing, so the freeform preference does not apply while the policy is on.
++        if (DuoPanels.panelPolicyEnabled()) mode = "fullscreen";
++
+         if (mode.equals("fullscreen")) {
+             windowMode = 1;
+         } else {
+diff --git a/src/com/android/launcher3/util/DuoPanels.java b/src/com/android/launcher3/util/DuoPanels.java
+index f2679b66d6..29e8ca330e 100644
+--- a/src/com/android/launcher3/util/DuoPanels.java
++++ b/src/com/android/launcher3/util/DuoPanels.java
+@@ -17,6 +17,7 @@
+ package com.android.launcher3.util;
+ 
+ import android.os.Build;
++import android.os.SystemProperties;
+ 
+ import com.android.internal.policy.DuoPanelGeometry;
+ 
+@@ -45,6 +46,17 @@ public final class DuoPanels {
+         return halves(widthPx, heightPx) != null;
+     }
+ 
++    /**
++     * True when the framework's two panel window policy is switched on for this Duo (persist.sys.phh.duo.panels or
++     * persist.debug.phh.duo.panels, as read by DuoDisplayAreaPolicyProvider). The framework reads the properties once
++     * at boot, so a change only agrees with the window policy after a reboot.
++     */
++    public static boolean panelPolicyEnabled() {
++        if (DuoPanelGeometry.forDevice(Build.DEVICE) == null) return false;
++        return SystemProperties.getBoolean("persist.sys.phh.duo.panels", false)
++                || SystemProperties.getBoolean("persist.debug.phh.duo.panels", false);
++    }
++
+     /** True when x is on the right screen; a touch on the hinge goes to the nearer screen. */
+     public static boolean isRightHalf(int[][] halves, float x) {
+         return x >= (halves[0][2] + halves[1][0]) / 2f;
+-- 
+2.56.0.windows.4
+
