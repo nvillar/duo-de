@@ -397,7 +397,7 @@ AAPT2="prebuilts/sdk/tools/linux/bin/aapt2"
 check_webview_source() {
     local pointer oid
     [ ! -e "$WEBVIEW_DIR/.git" ] \
-        || die "$WEBVIEW_DIR is still AOSP's platform/external/chromium-webview project; build/dev/pinned.xml replaces it with LineageOS's WebView. Re-run dev/sync.sh (if repo keeps the old directory, move $WEBVIEW_DIR out of the tree and sync again)"
+        || die "$WEBVIEW_DIR is still AOSP's platform/external/chromium-webview project; build/dev/pinned.xml replaces it with LineageOS's WebView. Run dev/sync.sh, which prints the one-time steps to move the old checkout aside (docs/development-setup.md, 5.1)"
     grep -q 'prebuilt/arm64/webview.apk' "$WEBVIEW_DIR/Android.bp" 2>/dev/null \
         || die "$WEBVIEW_DIR/Android.bp is not LineageOS's os_pickup.bp (missing repo linkfile); re-run dev/sync.sh"
     [ -f "$WEBVIEW_PREBUILT/webview.apk" ] || die "$WEBVIEW_PREBUILT/webview.apk is missing; re-run dev/sync.sh"

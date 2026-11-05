@@ -211,43 +211,146 @@ mkdir -p "$T/tree/packages/apps/DuoProbe"; echo mine > "$T/tree/packages/apps/Du
 if bash "$H/dev/build.sh" --skip-treble-app --with-probe --patch-only "$T/tree" >/dev/null 2>&1; then echo "FAIL foreign DuoProbe accepted"; else
     grep -q mine "$T/tree/packages/apps/DuoProbe/Android.bp" && echo "PASS a foreign packages/apps/DuoProbe is left alone"; fi
 rm -rf "$T/tree/packages"
-# Base-image change on an existing tree: AOSP's obsolete external/chromium-webview checkout.
+# Base-image change on an existing tree: AOSP's obsolete external/chromium-webview
+# checkout, in repo v2.71's layout (git dirs in .repo/projects, relative .git
+# symlinks, LineageOS projects nested in the old checkout).
 echo "---- sync: obsolete AOSP WebView checkout"
+export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
+# repo stub: like v2.71, re-creates missing checkouts of the new projects from
+# .repo/projects (_InitWorkTree: relative .git link, read-tree --reset -u), cannot
+# remove an obsolete checkout that looks dirty, links the files, updates project.list.
 cat > "$T/bin/repo" <<'EOF'
 #!/bin/bash
 case "$1" in
-  sync) if [ -n "${FAKE_SYNC_ERR:-}" ]; then echo "$FAKE_SYNC_ERR" >&2; exit 1; fi; echo "repo sync (stub)" ;;
+  sync)
+    echo sync >> "${REPO_LOG:-/dev/null}"
+    if [ -n "${FAKE_SYNC_ERR:-}" ]; then echo "$FAKE_SYNC_ERR" >&2; exit 1; fi
+    W=external/chromium-webview
+    if [ -f ".repo/projects/$W/patches.git/HEAD" ] \
+        && grep -qs 'remove-project name="platform/external/chromium-webview"' .repo/local_manifests/*.xml; then
+      for p in patches prebuilt/arm64; do
+        if [ ! -e "$W/$p/.git" ]; then
+          mkdir -p "$W/$p"; ln -s "$(realpath -m --relative-to="$W/$p" ".repo/projects/$W/$p.git")" "$W/$p/.git"
+          git -C "$W/$p" read-tree --reset -u HEAD
+        fi
+      done
+      if [ -e "$W/.git" ] && [ -n "$(git -C "$W" status --porcelain)" ]; then
+        echo "error: $W: Cannot remove project: uncommitted changes are present." >&2; exit 1
+      fi
+      ln -sfn patches/README "$W/README"; ln -sfn patches/os_pickup.bp "$W/Android.bp"
+      printf '%s\n' "$W/patches" "$W/prebuilt/arm64" > .repo/project.list
+    fi
+    echo "repo sync (stub)" ;;
   manifest) echo '<manifest/>' > "${@: -1}" ;;
   *) echo "repo stub $*" ;;
 esac
 EOF
 chmod +x "$T/bin/repo"
-S="$T/synctree"; OW="$S/external/chromium-webview"
+export REPO_LOG="$T/repo.log"
+S="$T/synctree"; OW="$S/external/chromium-webview"; GD="$S/.repo/projects/external/chromium-webview.git"
 REMOVES_WEBVIEW='<manifest><remove-project name="platform/external/chromium-webview" /></manifest>'
 echo "$REMOVES_WEBVIEW" > "$H/build/dev/pinned.xml"
-mk_old_webview() { # AOSP checkout with LineageOS projects already checked out inside it by a failed sync
-    rm -rf "$S"; mkdir -p "$OW/133.0.6943.137" "$S/.repo"
-    echo external/chromium-webview > "$S/.repo/project.list"
-    git -C "$OW" init -q; echo old > "$OW/133.0.6943.137/README"; echo 'android_app_import { name: "webview" }' > "$OW/Android.bp"
-    git -C "$OW" add -A; git -C "$OW" commit -qm aosp
-    git -C "$OW" config remote.aosp.projectname platform/external/chromium-webview
-    mkdir -p "$OW/patches" "$OW/prebuilt/arm64"
-    git -C "$OW/patches" init -q; echo x > "$OW/patches/README"; git -C "$OW/patches" add -A; git -C "$OW/patches" commit -qm p
-    git -C "$OW/prebuilt/arm64" init -q; echo apk > "$OW/prebuilt/arm64/webview.apk"; git -C "$OW/prebuilt/arm64" add -A; git -C "$OW/prebuilt/arm64" commit -qm a
-    ln -s patches/README "$OW/README"
+old_files() { mkdir -p "$1/133.0.6943.137/arm64" "$1/prebuilt"; echo apk133 > "$1/133.0.6943.137/arm64/webview.apk"
+    echo 'android_app_import { name: "webview" }' > "$1/Android.bp"; echo aosp > "$1/METADATA"; echo old > "$1/prebuilt/METADATA"; }
+patches_files() { echo 'android_app_import { name: "webview" }' > "$1/os_pickup.bp"; echo 'android_default_version_name = "156.0.8078.47"' > "$1/README"; }
+arm64_files() { echo apk156 > "$1/webview.apk"; }
+mk_repo_project() { # tree-path populate-function: repo-style checkout, detached at refs/remotes/m/*
+    local wt="$S/$1" gd="$S/.repo/projects/$1.git"
+    mkdir -p "$wt" "$(dirname -- "$gd")"
+    git init -q --separate-git-dir="$gd" "$wt"
+    rm "$wt/.git"; ln -s "$(realpath -m --relative-to="$wt" "$gd")" "$wt/.git"
+    "$2" "$wt"; git -C "$wt" add -A; git -C "$wt" commit -qm "$1"
+    git -C "$wt" update-ref refs/remotes/m/android-16.0.0_r4 HEAD; git -C "$wt" checkout -q --detach
+    git -C "$wt" for-each-ref --format='%(refname:short)' refs/heads/ | xargs -r git -C "$wt" branch -q -D
 }
-mk_old_webview
-bash "$H/dev/sync.sh" "$S" >/dev/null 2>"$T/sync.err" && [ ! -e "$OW" ] \
-    && [ -f "$(ls -d "$S/.duo-dev/obsolete/external-chromium-webview."* | head -n1)/Android.bp" ] && [ -f "$S/.duo-dev/obsolete/.find-ignore" ] \
-    && echo "PASS sync moves a clean obsolete AOSP WebView checkout aside" || { echo "FAIL obsolete WebView move"; cat "$T/sync.err"; }
-mk_old_webview; echo edit >> "$OW/Android.bp"
-if bash "$H/dev/sync.sh" "$S" >/dev/null 2>"$T/sync.err"; then echo "FAIL a modified obsolete WebView checkout was accepted"
-elif [ -d "$OW/.git" ] && grep -q "M Android.bp" "$T/sync.err" && [ ! -d "$S/.duo-dev/obsolete" ]; then echo "PASS a modified obsolete WebView checkout is refused and left in place"
-else echo "FAIL modified obsolete WebView"; cat "$T/sync.err"; fi
-mk_old_webview; echo '<manifest/>' > "$H/build/dev/pinned.xml"
-bash "$H/dev/sync.sh" "$S" >/dev/null 2>&1 && [ -d "$OW/.git" ] && [ ! -d "$S/.duo-dev/obsolete" ] \
-    && echo "PASS the WebView checkout is kept when the manifest does not remove it" || echo "FAIL WebView kept"
+mk_webview_tree() { # [typechange|nonested|linkedwt]: the state a failed sync leaves
+    rm -rf "$S" "$T/oldwt" "$T/mainrepo"; mkdir -p "$S/.repo" "$S/external"
+    echo external/chromium-webview > "$S/.repo/project.list"
+    if [ "${1:-}" == linkedwt ]; then
+        git init -q "$T/mainrepo"; old_files "$T/mainrepo"; git -C "$T/mainrepo" add -A; git -C "$T/mainrepo" commit -qm aosp
+        git -C "$T/mainrepo" update-ref refs/remotes/m/android-16.0.0_r4 HEAD; git -C "$T/mainrepo" worktree add -q --detach "$OW"
+    else
+        mk_repo_project external/chromium-webview old_files
+    fi
+    mk_repo_project external/chromium-webview/patches patches_files
+    mk_repo_project external/chromium-webview/prebuilt/arm64 arm64_files
+    if [ "${1:-}" == nonested ]; then rm -rf "$OW/patches" "$OW/prebuilt/arm64"; return; fi
+    ln -s patches/README "$OW/README"
+    if [ "${1:-}" == typechange ]; then rm "$OW/Android.bp"; ln -s patches/os_pickup.bp "$OW/Android.bp"; fi
+}
+snap() { (cd "$S" && find external .repo/projects -printf '%p|%y|%s|%T@|%l\n' 2>/dev/null | LC_ALL=C sort | sha256sum); }
+refused() { # label expected-text [tree-variant] -- setup command...
+    local label="$1" want="$2" variant="$3" before; shift 4
+    mk_webview_tree "$variant"; [ $# -eq 0 ] || "$@"
+    before="$(snap)"; : > "$REPO_LOG"
+    if bash "$H/dev/sync.sh" "$S" >/dev/null 2>"$T/sync.err"; then echo "FAIL $label: sync went ahead"; return; fi
+    if grep -qF -- "$want" "$T/sync.err" && [ ! -s "$REPO_LOG" ] && [ "$(snap)" == "$before" ] && [ ! -e "$S/.duo-dev/obsolete" ]; then
+        echo "PASS obsolete WebView refused, reported, nothing moved: $label"
+    else echo "FAIL obsolete WebView: $label (tree $([ "$(snap)" == "$before" ] && echo unchanged || echo CHANGED), repo calls: $(tr '\n' ' ' < "$REPO_LOG"))"; cat "$T/sync.err"; fi
+}
+g() { git -C "$OW${2:+/$2}" "${@:3}"; }   # g - [nested] git-args...
+# Old checkout: every kind of local work, each refused and named.
+refused "clean" "No local work found" "" --
+refused "unstaged" "' M Android.bp'" "" -- eval 'echo x >> "$OW/Android.bp"'
+refused "staged" "'M  METADATA'" "" -- eval 'echo x >> "$OW/METADATA"; g - "" add METADATA'
+refused "untracked" "'?? notes.txt'" "" -- eval 'echo x > "$OW/notes.txt"'
+refused "ignored" "'!! build.log'" "" -- eval 'echo "*.log" >> "$GD/info/exclude"; echo x > "$OW/build.log"'
+refused "committed, not pushed" "(1 commits not in it)" "" -- g - "" commit -q --allow-empty -m local
+refused "local branch" "local branches: keep" "" -- g - "" branch -q keep
+refused "stash" "stash: 1 entries" "" -- eval 'echo x >> "$OW/METADATA"; g - "" stash -q'
+refused "assume-unchanged" "index flags" "" -- g - "" update-index --assume-unchanged METADATA
+refused "skip-worktree" "index flags" "" -- g - "" update-index --skip-worktree prebuilt/METADATA
+refused "another linked worktree" "another worktree of this repository: $T/oldwt" "" -- g - "" worktree add -q --detach "$T/oldwt"
+refused "old checkout is a linked worktree" "is a linked worktree of" linkedwt --
+grep -q "^==== one-time migration steps" "$T/sync.err" && echo "FAIL steps printed for a linked worktree" \
+    || { grep -q "is not repo's link" "$T/sync.err" && echo "PASS no steps for a checkout that is not repo's link"; }
+# Nested LineageOS checkouts (review H1): their local work is named too.
+refused "nested staged" "'M  README'" "" -- eval 'echo x >> "$OW/patches/README"; g - patches add README'
+refused "nested unstaged" "' M webview.apk'" "" -- eval 'echo x >> "$OW/prebuilt/arm64/webview.apk"'
+refused "nested committed" "(1 commits not in it)" "" -- g - patches commit -q --allow-empty -m local
+refused "nested stash" "stash: 1 entries" "" -- eval 'echo x >> "$OW/patches/README"; g - patches stash -q'
+refused "nested ignored" "'!! x.log'" "" -- eval 'echo "*.log" >> "$S/.repo/projects/external/chromium-webview/prebuilt/arm64.git/info/exclude"; echo x > "$OW/prebuilt/arm64/x.log"'
+refused "nested skip-worktree" "index flags" "" -- g - patches update-index --skip-worktree README
+grep -q "Local work in the LineageOS checkout external/chromium-webview/patches" "$T/sync.err" \
+    && echo "PASS nested local work is attributed to its checkout" || echo "FAIL nested attribution"
+mk_webview_tree; echo '<manifest/>' > "$H/build/dev/pinned.xml"; : > "$REPO_LOG"
+bash "$H/dev/sync.sh" "$S" >/dev/null 2>&1 || true; [ -L "$OW/.git" ] && [ -s "$REPO_LOG" ] && [ ! -e "$S/.duo-dev/obsolete" ] \
+    && echo "PASS the WebView checkout is left to repo when the manifest does not remove it" || echo "FAIL WebView kept"
 echo "$REMOVES_WEBVIEW" > "$H/build/dev/pinned.xml"
+run_steps() { sed -n '/^==== one-time migration steps/,/^==== end of steps/{/^====/d;s/^    //;p}' "$T/sync.err" > "$T/steps.sh"
+    [ -s "$T/steps.sh" ] && bash -e "$T/steps.sh"; }
+# The printed steps, then a (mocked) repo sync: everything is kept and usable.
+mk_webview_tree typechange
+g - "" commit -q --allow-empty -m local; OLDHEAD=$(g - "" rev-parse HEAD)
+echo stashed >> "$OW/METADATA"; g - "" stash -q; g - "" branch -q keep
+echo staged >> "$OW/prebuilt/METADATA"; g - "" add prebuilt/METADATA; echo unstaged >> "$OW/METADATA"
+echo "*.log" >> "$GD/info/exclude"; echo log > "$OW/build.log"; g - "" update-index --assume-unchanged 133.0.6943.137/arm64/webview.apk
+g - "" worktree add -q --detach "$T/oldwt"
+echo staged >> "$OW/patches/README"; g - patches add README; echo unstaged >> "$OW/prebuilt/arm64/webview.apk"
+bash "$H/dev/sync.sh" "$S" >/dev/null 2>"$T/sync.err" && echo "FAIL sync went ahead"
+if run_steps >"$T/steps.out" 2>&1 && bash "$H/dev/sync.sh" "$S" >/dev/null 2>"$T/sync2.err"; then
+    D=$(ls -d "$S/.duo-dev/obsolete/external-chromium-webview."* 2>/dev/null || true)
+    st=$(git -C "$D" status --porcelain=v1 --ignored 2>&1 || true)
+    [ "$(git -C "$D" rev-parse HEAD 2>&1 || true)" == "$OLDHEAD" ] && grep -qx 'M  prebuilt/METADATA' <<<"$st" && grep -qx ' M METADATA' <<<"$st" \
+        && grep -qx '!! build.log' <<<"$st" && [ "$(grep -vc -e '^M  prebuilt/METADATA$' -e '^ M METADATA$' -e '^!! build.log$' <<<"$st")" -eq 0 ] \
+        && [ ! -L "$D/Android.bp" ] && grep -q webview "$D/Android.bp" && [ "$(git -C "$D" stash list | wc -l)" -eq 1 ] \
+        && git -C "$D" rev-parse -q --verify refs/heads/keep >/dev/null && git -C "$D" ls-files -v | grep -q '^h 133' \
+        && git -C "$T/oldwt" status --porcelain >/dev/null && [ -f "$S/.duo-dev/obsolete/.find-ignore" ] \
+        && echo "PASS the moved old checkout keeps HEAD, index, stash, branch, ignored files, index flags and worktrees" \
+        || { echo "FAIL moved old checkout"; git -C "$D" status --porcelain=v1 --ignored || true; }
+    [ "$(git -C "$OW/patches" diff --cached --name-only)" == README ] && [ "$(git -C "$OW/prebuilt/arm64" diff --name-only)" == webview.apk ] \
+        && [ ! -e "$OW/.git" ] && [ "$(readlink "$OW/Android.bp")" == patches/os_pickup.bp ] && ! grep -qx external/chromium-webview "$S/.repo/project.list" \
+        && echo "PASS the LineageOS checkouts keep their staged and unstaged changes through the steps and sync" \
+        || { echo "FAIL nested checkouts after migration"; git -C "$OW/patches" status; }
+    bash "$H/dev/sync.sh" "$S" >/dev/null 2>&1 && echo "PASS sync runs again after the migration"
+else echo "FAIL migration steps or the following sync"; cat "$T/steps.out" "$T/sync2.err" 2>/dev/null; fi
+mk_webview_tree nonested; echo edit >> "$OW/METADATA"
+bash "$H/dev/sync.sh" "$S" >/dev/null 2>"$T/sync.err" && echo "FAIL sync went ahead"
+if run_steps >/dev/null 2>&1 && bash "$H/dev/sync.sh" "$S" >/dev/null 2>&1; then
+    D=$(ls -d "$S/.duo-dev/obsolete/external-chromium-webview."* 2>/dev/null || true)
+    [ "$(git -C "$D" status --porcelain 2>&1 || true)" == " M METADATA" ] && [ -f "$OW/patches/os_pickup.bp" ] && [ -f "$OW/prebuilt/arm64/webview.apk" ] \
+        && echo "PASS the steps also work before the LineageOS checkouts exist" || echo "FAIL steps without nested checkouts"
+else echo "FAIL steps without nested checkouts"; cat "$T/sync.err"; fi
 rm -rf "$S"; mkdir -p "$S"; t0=$SECONDS
 if FAKE_SYNC_ERR="error: external/foo: Cannot remove project: uncommitted changes are present." bash "$H/dev/sync.sh" --attempts 3 "$S" >/dev/null 2>"$T/sync.err"; then echo "FAIL sync error ignored"
 elif grep -q "retrying would not help" "$T/sync.err" && ! grep -q "retrying in" "$T/sync.err" && [ $((SECONDS - t0)) -lt 30 ]; then echo "PASS 'Cannot remove project' stops without retries"
