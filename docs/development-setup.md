@@ -413,3 +413,16 @@ adb shell setprop persist.debug.phh.duo.panels 0; adb reboot   # disable
 `persist.sys.phh.duo.panels` also enables it; reset whichever is set.
 
 These properties persist in userdata. They survive reflashing the system image, but a factory reset clears them.
+
+### Three-finger gesture prototype (logging only)
+
+On images with frameworks_base patch 0020, SystemUI can log the three-finger span/contract/push gestures while
+two-panel mode is active; it takes no action. Off by default:
+
+```powershell
+adb shell settings put global duode_three_finger_gestures 1   # 0 to turn off; no reboot needed
+adb logcat -v time -s DuoGesture:I
+```
+
+Log format, threshold overrides and the tuning procedure: [three-finger-gestures.md](three-finger-gestures.md).
+Host tests and replay of raw `getevent` captures: `tools/duo-gesture/duo-gesture.sh test`.
