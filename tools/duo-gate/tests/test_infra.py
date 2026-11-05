@@ -186,6 +186,17 @@ class Restore(unittest.TestCase):
         self.assertEqual(v.status, INCOMPLETE)
         self.assertEqual(self.fake.sim.reboots, 0)
 
+    def test_unknown_mode_never_reboots(self):
+        # Astra's repro: recorded "maybe", current "0", no recorded 'active', reboot authorized
+        sim = self.fake.sim
+        sim.props["persist.debug.phh.duo.panels"] = "0"
+        v = preconditions.restore(self.dev, {"home": "a.b/.C", "settings": {},
+                                             "panels": {"persist.debug.phh.duo.panels": "maybe"}}, reboot=True)
+        self.assertEqual(v.status, INCOMPLETE)
+        self.assertEqual(sim.reboots, 0)
+        self.assertEqual(sim.props["persist.debug.phh.duo.panels"], "maybe")      # the property is still restored
+        self.assertTrue(any("not rebooting" in r for r in v.reasons), v.reasons)
+
     def test_equivalent_spellings_need_no_change(self):
         sim = self.fake.sim
         sim.props["persist.debug.phh.duo.panels"] = "true"

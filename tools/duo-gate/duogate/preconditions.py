@@ -172,7 +172,9 @@ def restore(dev, data: dict, reboot: bool = False) -> Verdict:
         now = _try(lambda: adb.getprop("sys.duode.panels.active"))
         if not parsers.same_bool_prop(now, active):
             reboot_needed = True
-    if reboot_needed:
+    if reboot_needed and active is None:
+        v.incomplete("not rebooting: the expected panel mode is unknown, so a reboot could not be verified")
+    elif reboot_needed:
         if not reboot:
             v.incomplete("panel mode differs from the recorded boot state; a reboot applies the restored properties: "
                          "duo_gate.py restore <evidence dir> --reboot (or adb reboot)")
@@ -182,9 +184,7 @@ def restore(dev, data: dict, reboot: bool = False) -> Verdict:
                 time.sleep(REBOOT_SETTLE)
                 adb.wait_for_boot()
                 now = adb.getprop("sys.duode.panels.active")
-                if active is None:
-                    v.incomplete("rebooted, but the expected panel mode is unknown")
-                elif not parsers.same_bool_prop(now, active):
+                if not parsers.same_bool_prop(now, active):
                     v.fail("after reboot sys.duode.panels.active=%r, expected %r" % (now, active))
                 else:
                     v.note("rebooted to apply the restored panel properties")
