@@ -130,6 +130,34 @@ The tool prompts for them and collects dumps, screenshots and log windows, but c
 
 The probe never logs editor contents: only the sentinel tokens it finds and the text length.
 
+## Rejected Back commit (manual, frameworks_base 0024)
+
+A committed predictive Back whose app-side Back changes nothing must not leave the animation composed (ledger F22).
+`am monitor` cannot produce one (its controller always allows `activityResuming`); `backveto/BackVeto.java` installs an
+activity controller that refuses `activityResuming` for a package, so `Task.canMoveTaskToBack` rejects the move of a
+home-launched task when another task of its panel would resume. It runs as the shell user through `app_process`.
+
+```sh
+tools/duo-gate/backveto/build.sh ~/aosp /tmp          # build host (WSL); prebuilts and a built framework.jar only
+adb push /tmp/backveto.dex /data/local/tmp/
+BV='CLASSPATH=/data/local/tmp/backveto.dex app_process /system/bin org.duode.gate.BackVeto'
+adb shell wm logging enable-text WM_DEBUG_BACK_PREVIEW
+adb shell dumpsys activity service SystemUIService WMShell protolog enable-text WM_SHELL_BACK_PREVIEW
+```
+
+1. Probe HOME, panel A empty, *Probe test 2 (own task)* on B. Tap *Probe test* on A: task X (home launch, so Back at
+   its root is `moveTaskToBack`).
+2. `adb shell am start --task-display-area-feature-id 10003 -n org.duode.probe/.ProbeLockedTestActivity`: task Y in
+   `Panel0Tasks`. Then `adb shell "$BV front <X>"`: X on top of Y, Y not hidden (`containers.txt`, `activities.txt`).
+3. `adb shell "$BV veto org.duode.probe 20" &`, then a committed Back on A (`adb shell input swipe 1 900 450 900 300`,
+   or a full finger swipe). Expect `activityResuming org.duode.probe -> refused` and `TYPE_CROSS_TASK` with Y as the
+   opening target.
+4. Pass: within about 3 s (post-commit animation, then 1 s), ShellBackPreview logs `Back committed but no closing
+   transition`, X's input frame is `[0,0][1350,1800]` again and Y is not visible (`dumpsys input`), B's task stays
+   touchable (tap it: a `touch` event from B), no lifecycle change for X. After the veto ends, Back on A works again:
+   X stops (`Back: minimized`), Y shows. Without 0024 X stays at `[135,180][1215,1620]` and later Backs are refused
+   (`Previous animation hasn't finish`).
+
 ## Not covered yet (stay INCOMPLETE or absent)
 
 - Transition containment (G8): no WM/Shell/SurfaceFlinger trace capture; final screenshots cannot prove containment.

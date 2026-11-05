@@ -19,7 +19,9 @@ target window had shown the keyboard before (restore).
 
 While the two panel policy is active (sys.duode.panels.active=1), a show request that is not served because the
 requesting view is the focused view of a window without window focus, on the default display, is remembered (weakly,
-with its flags and time); a later hide request from the process drops it.
+with its flags and time). A later hide drops it: hideSoftInputFromWindow / hideSoftInputFromView, and any IME hide
+through that window's InsetsController (WindowInsetsController.hide(ime()), also when the keyboard is already hidden,
+for example from onWindowFocusChanged(true), which runs before the replay).
 When the next window of this process gains focus and has started input, the request is replayed if that window's
 focused view is the requesting view, it still has focus, and the request is at most 1 s old; it is dropped otherwise.
 The replay is an ordinary showSoftInput from the now served view. Nothing changes with the policy off, or for a
@@ -30,11 +32,30 @@ build's framework jar.
 
 Co-authored-by: Copilot App <223556219+Copilot@users.noreply.github.com>
 ---
- .../view/inputmethod/InputMethodManager.java  | 85 +++++++++++++++++++
- 1 file changed, 85 insertions(+)
+ core/java/android/view/InsetsController.java  |   7 ++
+ .../view/inputmethod/InputMethodManager.java  | 102 ++++++++++++++++++
+ 2 files changed, 109 insertions(+)
 
+diff --git a/core/java/android/view/InsetsController.java b/core/java/android/view/InsetsController.java
+index 3317ae60e..c5fef6582 100644
+--- a/core/java/android/view/InsetsController.java
++++ b/core/java/android/view/InsetsController.java
+@@ -1261,6 +1261,13 @@ public class InsetsController implements WindowInsetsController, InsetsAnimation
+         if ((types & ime()) != 0) {
+             ProtoLog.d(IME_INSETS_CONTROLLER, "hide(ime())");
+ 
++            // Duo two panel policy: an explicit hide, even of an already hidden keyboard, wins over a keyboard request
++            // of this window that is waiting for its window focus to be replayed.
++            final InputMethodManager imm = mHost.getInputMethodManager();
++            if (imm != null) {
++                imm.cancelDuoPendingShow(mHost.getWindowToken());
++            }
++
+             if (statsToken == null) {
+                 statsToken = ImeTracker.forLogging().onStart(ImeTracker.TYPE_HIDE,
+                         ImeTracker.ORIGIN_CLIENT,
 diff --git a/core/java/android/view/inputmethod/InputMethodManager.java b/core/java/android/view/inputmethod/InputMethodManager.java
-index f6c611402..854eba198 100644
+index f6c611402..f17aaef28 100644
 --- a/core/java/android/view/inputmethod/InputMethodManager.java
 +++ b/core/java/android/view/inputmethod/InputMethodManager.java
 @@ -78,6 +78,7 @@ import android.os.Looper;
@@ -96,7 +117,7 @@ index f6c611402..854eba198 100644
              boolean forceFocus = false;
              synchronized (mH) {
                  // Update mNextServedView when focusedView changed.
-@@ -1122,6 +1160,48 @@ public final class InputMethodManager {
+@@ -1122,6 +1160,65 @@ public final class InputMethodManager {
                  || (servedView != null && servedView.checkInputConnectionProxy(view)));
      }
  
@@ -142,10 +163,27 @@ index f6c611402..854eba198 100644
 +        return view;
 +    }
 +
++    /**
++     * Duo two panel policy: drops a show request remembered for the window {@code windowToken} (see
++     * {@link #recordDuoPendingShowLocked}). Called for every IME hide through the window's insets controller, the path
++     * of WindowInsetsController#hide(ime()) as well as of this class's own hides, also when the keyboard is already
++     * hidden: the hide is the newer request and the window must not get the keyboard back on its focus gain.
++     *
++     * @hide
++     */
++    public void cancelDuoPendingShow(@Nullable IBinder windowToken) {
++        synchronized (mH) {
++            final View view = mDuoPendingShowView != null ? mDuoPendingShowView.get() : null;
++            if (view == null || windowToken == null || view.getWindowToken() == windowToken) {
++                mDuoPendingShowView = null;
++            }
++        }
++    }
++
      class H extends Handler {
          H(Looper looper) {
              super(looper, null, true);
-@@ -2453,6 +2533,7 @@ public final class InputMethodManager {
+@@ -2453,6 +2550,7 @@ public final class InputMethodManager {
          checkFocus();
          synchronized (mH) {
              if (!hasServedByInputMethodLocked(view)) {
@@ -153,7 +191,7 @@ index f6c611402..854eba198 100644
                  ImeTracker.forLogging().onFailed(statsToken, ImeTracker.PHASE_CLIENT_VIEW_SERVED);
                  ImeTracker.forLatency().onShowFailed(statsToken,
                          ImeTracker.PHASE_CLIENT_VIEW_SERVED, ActivityThread::currentApplication);
-@@ -2645,6 +2726,8 @@ public final class InputMethodManager {
+@@ -2645,6 +2743,8 @@ public final class InputMethodManager {
                  this, null /* icProto */);
          checkFocus();
          synchronized (mH) {
@@ -162,7 +200,7 @@ index f6c611402..854eba198 100644
              // Get served view again in case it changed between the synchronized blocks.
              final View servedView = getServedViewLocked();
              if (servedView == null || servedView.getWindowToken() != windowToken) {
-@@ -2705,6 +2788,8 @@ public final class InputMethodManager {
+@@ -2705,6 +2805,8 @@ public final class InputMethodManager {
          checkFocus();
          final boolean isFocusedAndWindowFocused = view.hasWindowFocus() && view.isFocused();
          synchronized (mH) {

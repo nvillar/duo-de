@@ -1,0 +1,87 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Nicolas Villar <15879262+nvillar@users.noreply.github.com>
+Date: Thu, 5 Nov 2026 12:18:56 -0800
+Subject: [PATCH] Duo: recover a committed predictive Back whose closing
+ transition never arrives
+
+A committed predictive Back that prepared a transition (cross-task, cross-activity, back to home) asks the app to go
+back and waits for the closing transition that results: BackTransitionHandler keeps the prepare transition and sets
+mCloseTransitionRequested, and core keeps the back animation composed until the closing transition finishes
+(BackNavigationController.onTransactionReady sets mPrepareCloseTransition; onTransitionFinish clears). If the app's Back
+changes nothing, no closing transition comes: Task.canMoveTaskToBack can reject the move (an activity controller veto
+of the task that would resume next, lock task), a moveTaskToBack can be a no-op, or the transition can be aborted or
+have no targets. Shell's animation timeout then finishes the gesture, but onAnimationFinished does not finish the
+prepare transition while mCloseTransitionRequested is set, and onBackNavigationDone does not clear the composition in
+core: the closing task keeps its post-commit transform, the opening target stays paused for touch
+(WindowState.canReceiveTouchInput -> shouldPauseTouch) and every later predictive Back returns "Previous animation
+hasn't finish" (ledger F22, residual after fw 0021/0022).
+
+When the post-commit animation has finished and the closing transition has not arrived (no close was merged or
+handled), BackTransitionHandler waits a bounded 1 s for it and then takes the existing cancel path: it clears
+mCloseTransitionRequested and starts the close prepare transition (WindowContainerTransaction.restoreBackNavi). Core
+restores the launch-behind targets (BackNavigationController.restoreBackNavigation), Shell finishes the held prepare
+transition (merge, startAnimation or onTransitionConsumed of the close prepare transition, as for a cancelled gesture),
+and core's onTransitionFinish of the prepare transition clears the animation (no mPrepareCloseTransition), which
+releases the leashes and the touch pause. A closing transition that arrives within the bound is handled as before; one
+that arrives later is played by the default handlers.
+
+Not built or run on a device yet. Verified by git am -3 after the series and a javac type check against the gate
+build's framework and WM Shell jars. Device test: tools/duo-gate/backveto (activity controller veto).
+
+Co-authored-by: Copilot App <223556219+Copilot@users.noreply.github.com>
+---
+ .../shell/back/BackAnimationController.java   | 28 +++++++++++++++++++
+ 1 file changed, 28 insertions(+)
+
+diff --git a/libs/WindowManager/Shell/src/com/android/wm/shell/back/BackAnimationController.java b/libs/WindowManager/Shell/src/com/android/wm/shell/back/BackAnimationController.java
+index 532bec2f8..3a7bc5c00 100644
+--- a/libs/WindowManager/Shell/src/com/android/wm/shell/back/BackAnimationController.java
++++ b/libs/WindowManager/Shell/src/com/android/wm/shell/back/BackAnimationController.java
+@@ -111,6 +111,8 @@ public class BackAnimationController implements RemoteCallable<BackAnimationCont
+      * Max duration to wait for an animation to finish before triggering the real back.
+      */
+     private static final long MAX_ANIMATION_DURATION = 2000;
++    /** Duo: how long a committed Back waits for its closing transition after the post-commit animation. */
++    private static final long COMMIT_CLOSE_TRANSITION_TIMEOUT_MS = 1000;
+     private long mMaxAnimationDuration = MAX_ANIMATION_DURATION;
+     // Note: Must keep a reference when register to ValueAnimator.
+     private final ValueAnimator.DurationScaleChangeListener mAnimationScaleChangeListener;
+@@ -1292,9 +1294,35 @@ public class BackAnimationController implements RemoteCallable<BackAnimationCont
+             if (mOnAnimationFinishCallback != null) {
+                 mOnAnimationFinishCallback.run();
+                 mOnAnimationFinishCallback = null;
++            } else if (mCloseTransitionRequested && mPrepareOpenTransition != null) {
++                scheduleCommitWithoutCloseRecovery(mPrepareOpenTransition);
+             }
+         }
+ 
++        /**
++         * Duo: a committed Back whose closing transition never arrives. The commit asks the app to go back and waits
++         * for the resulting closing transition while holding the prepare transition (mCloseTransitionRequested). If
++         * the app's Back changes nothing (a rejected moveTaskToBack: an activity controller veto, or a move that is a
++         * no-op), no closing transition comes, or it is aborted, and the prepare transition was never finished: core
++         * kept the animation composed, the opening target paused for touch and every later predictive Back refused.
++         * Bounded recovery: once the post-commit animation has finished, give the closing transition
++         * {@link #COMMIT_CLOSE_TRANSITION_TIMEOUT_MS}; if it has still not arrived, take the cancel path (the close
++         * prepare transition restores the launch-behind targets in core, finishes the prepare transition here, and core
++         * then clears the animation). A closing transition that arrives in time is merged as before.
++         */
++        private void scheduleCommitWithoutCloseRecovery(@NonNull IBinder prepareTransition) {
++            mShellExecutor.executeDelayed(() -> {
++                if (!mCloseTransitionRequested || mPrepareOpenTransition != prepareTransition
++                        || mOnAnimationFinishCallback != null || mClosePrepareTransition != null) {
++                    return;
++                }
++                ProtoLog.w(WM_SHELL_BACK_PREVIEW, "Back committed but no closing transition in %d ms,"
++                        + " restoring the back navigation", COMMIT_CLOSE_TRANSITION_TIMEOUT_MS);
++                mCloseTransitionRequested = false;
++                createClosePrepareTransition();
++            }, COMMIT_CLOSE_TRANSITION_TIMEOUT_MS);
++        }
++
+         private void applyFinishOpenTransition() {
+             if (mFinishOpenTransaction != null) {
+                 final SurfaceControl.Transaction t = mFinishOpenTransaction;
+-- 
+2.34.1
+
