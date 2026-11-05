@@ -50,6 +50,7 @@ def cmd_run(args, preflight_only: bool = False) -> int:
     restore_v = None
     pre: dict = {}
     pf = Verdict()
+    preflight_done = False
     try:
         try:
             dev = Device(adb, outdir, run_id, settle=args.settle, screens=args.screens)
@@ -57,8 +58,17 @@ def cmd_run(args, preflight_only: bool = False) -> int:
             preconditions.write_restore(dev, pre)
             posture = op.yes_no("Is the device unfolded with BOTH panels lit, hinge vertical, rotation 0 (left = A)?")
             pre["operator_posture_dual"] = posture
+            pre["posture_source"] = "operator prompt"
+            if posture is None and args.posture_confirmed:
+                posture = pre["operator_posture_dual"] = True
+                pre["posture_source"] = "--posture-confirmed (operator assertion on the command line)"
             if posture is False:
                 pf.incomplete("operator: device not in the dual posture")
+            elif posture is None:
+                pf.incomplete("dual posture not confirmed (no operator answer): answer the prompt, or pass "
+                              "--posture-confirmed when running without a terminal")
+            # keyguard first: otherwise it only shows up later as "no probe home buttons"
+            pf.merge(preconditions.check_keyguard(dev, pre, dismiss=not preflight_only and pf.ok))
             if pf.ok:
                 if not preflight_only:
                     pre["test_settings"] = preconditions.apply_test_settings(dev, pre)
@@ -69,10 +79,14 @@ def cmd_run(args, preflight_only: bool = False) -> int:
                 dev.key(KEY_HOME)
                 time.sleep(1)
                 dev.home_targets()      # fail early if the probe home cannot be driven
+            preflight_done = True
         except (EvidenceError, AdbError) as e:
             pf.incomplete("preflight: %s" % e)
         except KeyboardInterrupt:
             pf.incomplete("preflight interrupted by the operator")
+        except Exception as e:      # noqa: BLE001 - a tool error leaves the preflight INCOMPLETE, never PASS
+            pf.incomplete("preflight tool error: %s: %s" % (type(e).__name__, e))
+            results["errors"].append("preflight: %s" % traceback.format_exc())
         results["preflight"] = _verdict_json(pf)
         if dev is not None and pre:
             dev.write_json("preconditions.json", pre)
@@ -108,7 +122,10 @@ def cmd_run(args, preflight_only: bool = False) -> int:
         if dev is not None:
             dev.close()
         op.close()
-        results.setdefault("preflight", _verdict_json(pf))
+        if not preflight_done and pf.ok:
+            # anything that escaped the preflight (e.g. SystemExit) must never leave it reported as PASS
+            pf.incomplete("preflight did not finish")
+        results["preflight"] = _verdict_json(pf)
         checks = [c.to_json() for c in (ctx.checks if ctx else [])]
         for g in selected:
             if not preflight_only and g not in aborted and not any(c["gate"] == g for c in checks):
@@ -190,6 +207,9 @@ def main(argv=None) -> int:
         sp.add_argument("--out", default=os.path.join(os.path.expanduser("~"), "duogate-evidence"),
                         help="parent directory for evidence (default: ~/duogate-evidence, outside the repository)")
         sp.add_argument("--no-input", action="store_true", help="no operator prompts: manual steps stay INCOMPLETE")
+        sp.add_argument("--posture-confirmed", action="store_true",
+                        help="operator assertion that the device is unfolded, both panels lit, rotation 0 (recorded); "
+                             "used when the posture prompt gets no answer (--no-input or no terminal)")
 
     pre = sub.add_parser("preflight", help="record and check the preconditions only (changes nothing)")
     run_opts(pre)

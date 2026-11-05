@@ -12,6 +12,7 @@ from duogate.adb import Adb, AdbError
 from duogate.device import Device
 from duogate.logstream import LogBuffer
 from duogate.model import EvidenceError, FAIL, INCOMPLETE, PASS, Rect
+from duogate.prompts import Operator
 
 from tests.sim import FakeAdb, Sim, marker
 
@@ -242,6 +243,18 @@ class UiFallbackPrivacy(unittest.TestCase):
             shutil.rmtree(tmp, ignore_errors=True)
 
 
+class Prompts(unittest.TestCase):
+    def test_end_of_input_is_skip(self):
+        def eof(prompt=""):
+            raise EOFError
+        op = Operator(interactive=True, inp=eof, secret_inp=eof)
+        self.assertIsNone(op.yes_no("posture?"))
+        self.assertFalse(op.interactive)            # later prompts are skipped without reading stdin again
+        self.assertFalse(Operator(interactive=True, inp=eof).wait("do it"))
+        self.assertIsNone(Operator(interactive=True, inp=eof).choose("which?", ["a", "b"]))
+        self.assertIsNone(Operator(interactive=True, inp=eof, secret_inp=eof).secret("PIN"))
+
+
 class Reporting(unittest.TestCase):
     def test_gate_verdicts(self):
         checks = [{"gate": "G4", "manual": False, "status": PASS}, {"gate": "G4", "manual": True, "status": INCOMPLETE},
@@ -285,7 +298,7 @@ class CliRun(unittest.TestCase):
             return json.load(f), os.path.join(self.tmp, run[0])
 
     def test_run_restores_and_reports(self):
-        rc = cli.main(["run", "G1", "G2", "G9", "--reps", "1", "--no-input", "--out", self.tmp, "--settle", "0.05",
+        rc = cli.main(["run", "G1", "G2", "G9", "--reps", "1", "--no-input", "--posture-confirmed", "--out", self.tmp, "--settle", "0.05",
                        "--screens", "none"])
         r, outdir = self.results()
         self.assertEqual(r["preflight"]["status"], PASS, r["preflight"])
@@ -319,7 +332,7 @@ class CliRun(unittest.TestCase):
             raise KeyboardInterrupt
         cli.gates.GATES["G1"] = interrupted
         try:
-            rc = cli.main(["run", "G1", "G2", "--reps", "1", "--no-input", "--out", self.tmp, "--settle", "0.05",
+            rc = cli.main(["run", "G1", "G2", "--reps", "1", "--no-input", "--posture-confirmed", "--out", self.tmp, "--settle", "0.05",
                            "--screens", "none"])
         finally:
             cli.gates.GATES["G1"] = orig
@@ -341,7 +354,7 @@ class CliRun(unittest.TestCase):
             ctx.dev.remove_probe_tasks = lost
         cli.gates.GATES["G1"] = breaks_cleanup
         try:
-            cli.main(["run", "G1", "--reps", "1", "--no-input", "--out", self.tmp, "--settle", "0.05",
+            cli.main(["run", "G1", "--reps", "1", "--no-input", "--posture-confirmed", "--out", self.tmp, "--settle", "0.05",
                       "--screens", "none"])
         finally:
             cli.gates.GATES["G1"] = orig
@@ -356,6 +369,123 @@ class CliRun(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 cli.main(["run", "G1", "--reps", bad, "--no-input", "--out", self.tmp])
         self.assertEqual(os.listdir(self.tmp), [])
+
+    def run_cli(self, *extra, inp=None):
+        """A run whose operator prompts read from `inp` (default: real stdin replaced by a closed stream)."""
+        import io
+        old = sys.stdin
+        sys.stdin = inp if inp is not None else io.StringIO("")
+        try:
+            return cli.main(["run", "G1", "--reps", "1", "--out", self.tmp, "--settle", "0.05", "--screens", "none",
+                             *extra])
+        finally:
+            sys.stdin = old
+
+    def test_closed_stdin_skips_the_posture_prompt_and_never_passes(self):
+        import contextlib
+        import io
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            rc = self.run_cli()                       # interactive mode, but stdin is at EOF (no TTY)
+        r, outdir = self.results()
+        self.assertEqual(rc, 2)
+        self.assertEqual(r["preflight"]["status"], INCOMPLETE)
+        self.assertTrue(any("posture not confirmed" in x for x in r["preflight"]["reasons"]), r["preflight"])
+        self.assertFalse(r["errors"], r["errors"])
+        self.assertNotIn("preflight: PASS", out.getvalue())
+        with open(os.path.join(outdir, "operator.log"), encoding="utf-8") as f:
+            self.assertIn("STDIN CLOSED", f.read())
+        # nothing was changed on the device: no test settings, HOME untouched
+        sim = self.fakes[0].sim
+        self.assertEqual(sim.home_component, "com.android.launcher3/.uioverrides.QuickstepLauncher")
+        self.assertFalse(any(c.startswith("settings put") for c in sim.commands))
+
+    def test_closed_stdin_with_posture_asserted_runs(self):
+        rc = self.run_cli("--posture-confirmed")
+        r, _ = self.results()
+        self.assertEqual(r["preflight"]["status"], PASS, r["preflight"])
+        self.assertIn("--posture-confirmed", r["preconditions"]["posture_source"])
+        self.assertEqual(rc, 0)
+
+    def test_tool_error_in_preflight_is_incomplete_not_a_crash(self):
+        orig = preconditions.check_panel_mode
+
+        def boom(dev):
+            raise RuntimeError("unexpected")
+        preconditions.check_panel_mode = boom
+        try:
+            rc = cli.main(["run", "G1", "--reps", "1", "--no-input", "--posture-confirmed", "--out", self.tmp])
+        finally:
+            preconditions.check_panel_mode = orig
+        r, _ = self.results()
+        self.assertEqual(rc, 2)
+        self.assertEqual(r["preflight"]["status"], INCOMPLETE)
+        self.assertTrue(r["errors"])
+
+    def keyguard_run(self, credential, *extra, bugs=()):
+        orig = Sim.__init__
+
+        def init(sim, log, b=()):
+            orig(sim, log, set(b) | set(bugs))
+            sim.keyguard = True
+            sim.credential = credential
+        Sim.__init__ = init
+        try:
+            rc = cli.main(["run", "G1", "--reps", "1", "--no-input", "--posture-confirmed", "--out", self.tmp,
+                           "--settle", "0.05", "--screens", "none", *extra])
+        finally:
+            Sim.__init__ = orig
+        r, _ = self.results()
+        return rc, r, self.fakes[0].sim
+
+    def test_keyguard_without_secure_lock_is_dismissed_and_recorded(self):
+        rc, r, sim = self.keyguard_run("NONE")
+        self.assertEqual(r["preflight"]["status"], PASS, r["preflight"])
+        self.assertIn("wm dismiss-keyguard", sim.commands)
+        self.assertIn("input keyevent 224", sim.commands)
+        kg = r["preconditions"]["keyguard"]
+        self.assertEqual((kg["showing_at_start"], kg["dismissed"]), (True, True))
+        self.assertIn("not restored", kg["action"])
+        self.assertNotIn("keyguard", json.dumps(preconditions.load_restore(r["outdir"])))
+
+    def test_keyguard_with_secure_lock_is_the_specific_reason(self):
+        rc, r, sim = self.keyguard_run("PIN")
+        self.assertEqual(rc, 2)
+        self.assertEqual(r["preflight"]["status"], INCOMPLETE)
+        self.assertTrue(any("keyguard showing (screen lock PIN)" in x for x in r["preflight"]["reasons"]),
+                        r["preflight"])
+        self.assertFalse(any("uiautomator" in x for x in r["preflight"]["reasons"]), r["preflight"])
+        self.assertNotIn("wm dismiss-keyguard", sim.commands)
+        self.assertFalse(any(c.startswith("settings put") for c in sim.commands))
+
+    def test_keyguard_that_does_not_go_away_is_incomplete(self):
+        orig = preconditions.check_keyguard
+
+        def quick(dev, pre, dismiss, wait=5.0):
+            return orig(dev, pre, dismiss, wait=0.1)
+        preconditions.check_keyguard = quick
+        try:
+            rc, r, sim = self.keyguard_run("NONE", bugs={"keyguard_sticks"})
+        finally:
+            preconditions.check_keyguard = orig
+        self.assertEqual(r["preflight"]["status"], INCOMPLETE)
+        self.assertTrue(any("still showing" in x for x in r["preflight"]["reasons"]), r["preflight"])
+
+    def test_preflight_command_never_dismisses_the_keyguard(self):
+        orig = Sim.__init__
+
+        def init(sim, log, b=()):
+            orig(sim, log, b)
+            sim.keyguard = True
+        Sim.__init__ = init
+        try:
+            rc = cli.main(["preflight", "--no-input", "--posture-confirmed", "--out", self.tmp])
+        finally:
+            Sim.__init__ = orig
+        r, _ = self.results()
+        self.assertEqual(r["preflight"]["status"], INCOMPLETE)
+        self.assertTrue(any("`run` dismisses it" in x for x in r["preflight"]["reasons"]), r["preflight"])
+        self.assertNotIn("wm dismiss-keyguard", self.fakes[0].sim.commands)
 
     def test_old_probe_stops_the_run_before_any_change(self):
         orig = Sim.shell

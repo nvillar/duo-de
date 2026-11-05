@@ -99,6 +99,57 @@ def collect(dev, op) -> tuple[dict, Verdict]:
     return pre, v
 
 
+KEY_WAKEUP = 224
+
+
+def _keyguard_showing(dev) -> bool | None:
+    return parsers.parse_activities(dev.adb.shell("dumpsys activity activities")).keyguard_showing
+
+
+def check_keyguard(dev, pre: dict, dismiss: bool, wait: float = 5.0) -> Verdict:
+    """The keyguard must be gone before the probe home can be driven. Checked before anything else touches the UI so
+    the reason is specific. With no secure lock and `dismiss`, it is dismissed (wake + wm dismiss-keyguard) and the
+    action is recorded in pre["keyguard"]; nothing is restored for it. With a secure lock (or an unknown credential)
+    it is never dismissed: INCOMPLETE with an operator instruction."""
+    v = Verdict()
+    state: dict = {}
+    pre["keyguard"] = state
+    try:
+        showing = _keyguard_showing(dev)
+    except (EvidenceError, AdbError) as e:
+        state["showing_at_start"] = None
+        return v.incomplete("keyguard state unknown: %s" % e)
+    state["showing_at_start"] = showing
+    if showing is None:
+        return v.incomplete("keyguard state not found in dumpsys activity activities")
+    if not showing:
+        return v
+    cred = pre.get("secure_lock")
+    if cred != "NONE":
+        return v.incomplete("keyguard showing (screen lock %s): unlock the device on screen, then run again" % cred)
+    if not dismiss:
+        return v.incomplete("keyguard showing (no secure lock): `run` dismisses it; `preflight` changes nothing")
+    dev.adb.shell("input keyevent %d" % KEY_WAKEUP)
+    dev.adb.shell("wm dismiss-keyguard", check=False)
+    state["action"] = "wake + wm dismiss-keyguard (no secure lock); not restored"
+    deadline = time.monotonic() + wait
+    while True:
+        try:
+            showing = _keyguard_showing(dev)
+        except (EvidenceError, AdbError) as e:
+            state["dismissed"] = None
+            return v.incomplete("keyguard state unknown after dismissing it: %s" % e)
+        if showing is False or time.monotonic() >= deadline:
+            break
+        time.sleep(0.5)
+    state["dismissed"] = showing is False
+    if showing is not False:
+        v.incomplete("keyguard still showing after wake + wm dismiss-keyguard: unlock the device on screen")
+    else:
+        v.note("keyguard dismissed (no secure lock)")
+    return v
+
+
 def check_panel_mode(dev) -> Verdict:
     """Panel mode effective this boot, with the Duo 1 geometry."""
     v = Verdict()
@@ -137,6 +188,8 @@ def restore(dev, data: dict, reboot: bool = False) -> Verdict:
     for nk, value in data.get("settings", {}).items():
         ns, key = nk.split("/", 1)
         try:
+            if adb.setting(ns, key) == value:
+                continue            # never changed (e.g. preflight stopped before the test settings)
             adb.put_setting(ns, key, value)
             if adb.setting(ns, key) != value:
                 v.fail("setting %s not restored (want %r)" % (nk, value))

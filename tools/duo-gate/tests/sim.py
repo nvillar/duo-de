@@ -304,6 +304,7 @@ class Sim:
         self.ui_xml = fixture("probe-home-uiautomator.xml")
         self.props["sys.boot_completed"] = "1"
         self.rotation = 0
+        self.keyguard = False
         self.reboots = 0
         self.root = False
         self.emit(home_targets())
@@ -422,6 +423,12 @@ class Sim:
         if cmd == "input keyevent 3":
             self.home()
             return ""
+        if cmd == "input keyevent 224":
+            return ""
+        if cmd == "wm dismiss-keyguard":
+            if self.credential == "NONE" and "keyguard_sticks" not in self.bugs:
+                self.keyguard = False
+            return ""
         if cmd.startswith("input text "):
             return ""          # the simulated probe has no editors: no text event (input not received)
         m = re.match(r"input swipe (\d+) (\d+) (\d+) (\d+)", cmd)
@@ -507,7 +514,7 @@ class Sim:
         if cmd == "dumpsys activity containers":
             return containers(self.tasks)
         if cmd == "dumpsys activity activities":
-            return activities(self.tasks)
+            return activities(self.tasks, keyguard=self.keyguard)
         if cmd == "dumpsys window windows":
             return windows(self.tasks)
         if cmd == "dumpsys window displays":

@@ -20,6 +20,19 @@ class Operator:
             self._transcript.write("%s %s\n" % (time.strftime("%H:%M:%S"), text))
             self._transcript.flush()
 
+    def _stdin_closed(self) -> None:
+        """No more input (stdin closed, no TTY): every later prompt is skipped, as in --no-input."""
+        self.interactive = False
+        self._record("STDIN CLOSED: remaining prompts skipped")
+
+    def _ask(self, prompt: str) -> str:
+        """One answer, lower-cased; end of input counts as 's' (skip), never as an answer."""
+        try:
+            return self._inp(prompt).strip().lower()
+        except EOFError:
+            self._stdin_closed()
+            return "s"
+
     def say(self, msg: str) -> None:
         print(msg, file=self._out, flush=True)
         self._record("SAY " + msg.replace("\n", " | "))
@@ -29,7 +42,7 @@ class Operator:
         if not self.interactive:
             self._record("SKIPPED (non-interactive) " + msg)
             return False
-        ans = self._inp("\n>>> %s\n    [Enter when done, s to skip] " % msg).strip().lower()
+        ans = self._ask("\n>>> %s\n    [Enter when done, s to skip] " % msg)
         self._record("WAIT %s -> %s" % (msg.replace("\n", " | "), ans or "done"))
         return ans != "s"
 
@@ -39,7 +52,7 @@ class Operator:
             self._record("SKIPPED (non-interactive) " + msg)
             return None
         while True:
-            ans = self._inp("\n??? %s [y/n/s] " % msg).strip().lower()
+            ans = self._ask("\n??? %s [y/n/s] " % msg)
             if ans in ("y", "n", "s"):
                 self._record("ASK %s -> %s" % (msg, ans))
                 return None if ans == "s" else ans == "y"
@@ -49,7 +62,7 @@ class Operator:
             self._record("SKIPPED (non-interactive) " + msg)
             return None
         while True:
-            ans = self._inp("\n??? %s %s (s to skip) " % (msg, "/".join(choices))).strip().lower()
+            ans = self._ask("\n??? %s %s (s to skip) " % (msg, "/".join(choices)))
             if ans == "s":
                 self._record("ASK %s -> skip" % msg)
                 return None
@@ -60,7 +73,11 @@ class Operator:
     def secret(self, msg: str) -> str | None:
         if not self.interactive:
             return None
-        value = self._secret("\n*** %s (not echoed, not logged): " % msg)
+        try:
+            value = self._secret("\n*** %s (not echoed, not logged): " % msg)
+        except EOFError:
+            self._stdin_closed()
+            return None
         self._record("SECRET %s -> <%s>" % (msg, "entered" if value else "empty"))
         return value or None
 

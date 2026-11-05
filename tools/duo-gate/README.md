@@ -54,7 +54,10 @@ uv run --no-project python tools/duo-gate/duo_gate.py report ~/duogate-evidence/
 ```
 
 Options for `run`: `--reps N` (>= 1, default 10; 0 or negative is rejected), `--settle S` (max seconds to wait for an expected event, default 8),
-`--screens key|all|none`, `--no-input` (no prompts: manual steps stay INCOMPLETE), `--allow-reboot` (PO),
+`--screens key|all|none`, `--no-input` (no prompts: manual steps stay INCOMPLETE; a closed stdin, e.g. no terminal,
+behaves the same: end of input is "skip"), `--posture-confirmed` (also for `preflight`: operator assertion that the
+device is unfolded, both panels lit, rotation 0; needed when the posture prompt gets no answer, otherwise the preflight
+is INCOMPLETE), `--allow-reboot` (PO),
 `--g6-unlock pin|manual`, `--launcher-app` (G1L, default Calendar), `--quickstep` (Launcher3 HOME component for G1L/G3),
 `--keep-settings` (skip restoration), `--out DIR` (default `~/duogate-evidence`, outside the repository), global `--serial`, `--adb`.
 Exit code: 0 PASS, 1 FAIL, 2 INCOMPLETE, 3 usage error.
@@ -67,7 +70,12 @@ Exit code: 0 PASS, 1 FAIL, 2 INCOMPLETE, 3 usage error.
    present; HOME; Recents component; IME (default, enabled, `show_ime_with_hard_keyboard`, recorded only); navigation
    mode; density;
    physical/override size; display offset; committed device state; rotation settings; secure-lock credential type
-   (only the type is stored); operator confirmation of the dual posture.
+   (only the type is stored); operator confirmation of the dual posture (prompt, or `--posture-confirmed`; unanswered
+   -> INCOMPLETE); keyguard state, checked before anything drives the UI. A showing keyguard is the specific
+   INCOMPLETE reason: with no secure lock `run` dismisses it (wake + `wm dismiss-keyguard`, recorded in
+   `preconditions.json` as `keyguard`, nothing restored for it), `preflight` only reports it; with a secure lock the
+   operator unlocks on screen and runs again. The preflight verdict is only printed once every preflight step finished;
+   any tool error there is INCOMPLETE.
 2. **Test settings** (recorded, restored at the end): `stay_on_while_plugged_in=7`, `accelerometer_rotation=0`,
    `user_rotation=0`, HOME = `org.duode.probe/.ProbeHomeActivity`. IME settings are never changed
    (`show_ime_with_hard_keyboard` stays at the device's value: forcing it could mask IME defects; a keyboard that does
