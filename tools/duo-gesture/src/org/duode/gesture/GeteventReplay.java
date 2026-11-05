@@ -98,7 +98,10 @@ public final class GeteventReplay {
         DuoThreeFingerClassifier classifier = new DuoThreeFingerClassifier(mConfig, () -> display,
                 r -> current[0].results.add(r));
 
-        Map<Integer, long[]> slots = new HashMap<>();   // slot -> {tracking id, raw x, raw y}; -1 = unknown
+        // slot -> {tracking id (-1: no contact), raw x, raw y (-1: never reported)}. Like the kernel's Type-B state
+        // and InputReader's MultiTouchMotionAccumulator, coordinates stay with the slot across releases and new
+        // tracking ids: a new contact in a reused slot need not repeat an unchanged coordinate.
+        Map<Integer, long[]> slots = new HashMap<>();
         TreeMap<Integer, float[]> pointers = new TreeMap<>();  // pointer id -> display x, y
         Map<Long, Integer> pointerOf = new HashMap<>();  // tracking id -> pointer id
         int slot = 0;
@@ -115,23 +118,20 @@ public final class GeteventReplay {
             String code = m.group(5);
             long value = Long.parseLong(m.group(6), 16);
             if (type.equals("EV_ABS")) {
-                long signed = (int) value;
+                if (code.equals("ABS_MT_SLOT")) {
+                    slot = (int) value;
+                    continue;
+                }
+                long[] s = slots.computeIfAbsent(slot, k -> new long[] {-1, -1, -1});
                 switch (code) {
-                    case "ABS_MT_SLOT":
-                        slot = (int) value;
-                        break;
                     case "ABS_MT_TRACKING_ID":
-                        if (signed < 0) {
-                            slots.remove(slot);
-                        } else {
-                            slots.put(slot, new long[] {signed, -1, -1});
-                        }
+                        s[0] = Math.max(-1, (int) value);
                         break;
                     case "ABS_MT_POSITION_X":
-                        if (slots.containsKey(slot)) slots.get(slot)[1] = value;
+                        s[1] = value;
                         break;
                     case "ABS_MT_POSITION_Y":
-                        if (slots.containsKey(slot)) slots.get(slot)[2] = value;
+                        s[2] = value;
                         break;
                     default:
                         break;
@@ -142,7 +142,7 @@ public final class GeteventReplay {
                 // Contacts of this frame, by tracking id.
                 Map<Long, float[]> now = new HashMap<>();
                 for (long[] s : slots.values()) {
-                    if (s[1] >= 0 && s[2] >= 0) now.put(s[0], toDisplay(s[1], s[2]));
+                    if (s[0] >= 0 && s[1] >= 0 && s[2] >= 0) now.put(s[0], toDisplay(s[1], s[2]));
                 }
                 // Lifted pointers first, with the latest positions of the others.
                 List<Integer> ups = new ArrayList<>();

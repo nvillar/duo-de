@@ -14,7 +14,7 @@ the order they start; the replay prints the same numbers).
 
 | Touch | What was done | Expected report |
 |---|---|---|
-| 0 | Three-finger pinch-out on panel 0; one finger finally slides off the top edge | SPAN panel 0, commit (`parked`) |
+| 0 | Three-finger pinch-out on panel 0; one finger finally slides off the top edge, after which the controller reports three short contacts at y = 0 in that slot (new tracking ids that resend only X) | SPAN panel 0, commit (`parked`); the parked contacts are ignored |
 | 1 | Three-finger pinch-in on panel 0 | CONTRACT panel 0, commit |
 | 2 | Three-finger pinch-out on panel 1; the third finger lands 139 ms after the first while the first two already move | SPAN panel 1, commit |
 | 3 | Three-finger pinch-in on panel 1 | CONTRACT panel 1, commit |

@@ -36,6 +36,7 @@ import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Locale;
 
 /**
  * Replays the raw Duo 1 captures in testdata/ (see testdata/README.md for what each touch is) and checks what the
@@ -74,6 +75,8 @@ public class ReplayFixtureTest {
     public void singlePanelPinchesAndAPushAcrossTheHinge() throws IOException {
         List<GeteventReplay.Touch> touches = replay("touch3.getevent", DEFAULTS, 0);
         assertEquals(12, touches.size());
+        // Touch 0 includes three parked contacts at y=0 whose new tracking ids resend only X.
+        assertEquals(6, touches.get(0).contacts);
         assertEquals(Arrays.asList(
                 "0 RECOGNIZED SPAN 0 3+0 pinch", "0 COMMIT SPAN 0 3+0 parked",
                 "1 RECOGNIZED CONTRACT 0 3+0 pinch", "1 COMMIT CONTRACT 0 3+0 lift",
@@ -120,6 +123,72 @@ public class ReplayFixtureTest {
                         || Math.abs(recognized.acrossPx) < 0.5f * Math.abs(end.acrossPx));
             }
         }
+    }
+
+    private static String abs(double t, String code, long value) {
+        return String.format(Locale.ROOT, "[%12.6f] EV_ABS       %-20s %08x", t, code, value & 0xffffffffL);
+    }
+
+    private static String syn(double t) {
+        return String.format(Locale.ROOT, "[%12.6f] EV_SYN       SYN_REPORT           00000000", t);
+    }
+
+    private static long rawX(double displayX) {
+        return Math.round(displayX * GeteventReplay.RAW_WIDTH / GeteventReplay.DISPLAY_WIDTH);
+    }
+
+    private static long rawY(double displayY) {
+        return Math.round(displayY * GeteventReplay.RAW_HEIGHT / GeteventReplay.DISPLAY_HEIGHT);
+    }
+
+    @Test
+    public void aNewContactInAReusedSlotKeepsTheSlotsCoordinates() throws IOException {
+        // Type-B slots keep their axis values: a new tracking id in a reused slot only resends what changed.
+        List<String> t = new ArrayList<>();
+        // Touch 0: one finger in slot 3 at (900, 950), lifted.
+        t.add(abs(1.0, "ABS_MT_SLOT", 3));
+        t.add(abs(1.0, "ABS_MT_TRACKING_ID", 100));
+        t.add(abs(1.0, "ABS_MT_POSITION_X", rawX(900)));
+        t.add(abs(1.0, "ABS_MT_POSITION_Y", rawY(950)));
+        t.add(syn(1.0));
+        t.add(abs(1.05, "ABS_MT_TRACKING_ID", -1));
+        t.add(syn(1.05));
+        // Touch 1: three fingers on panel 0 start a pinch-out...
+        double[][] f = {{675, 750}, {545, 975}, {805, 975}};
+        double[][] dir = {{0, -1}, {-0.866, 0.5}, {0.866, 0.5}};
+        for (int i = 0; i < 3; i++) {
+            t.add(abs(2.0, "ABS_MT_SLOT", i));
+            t.add(abs(2.0, "ABS_MT_TRACKING_ID", 1 + i));
+            t.add(abs(2.0, "ABS_MT_POSITION_X", rawX(f[i][0])));
+            t.add(abs(2.0, "ABS_MT_POSITION_Y", rawY(f[i][1])));
+        }
+        t.add(syn(2.0));
+        for (int step = 1; step <= 12; step++) {
+            double time = 2.0 + 0.01 * step;
+            for (int i = 0; i < 3; i++) {
+                t.add(abs(time, "ABS_MT_SLOT", i));
+                t.add(abs(time, "ABS_MT_POSITION_X", rawX(f[i][0] + 20 * step * dir[i][0])));
+                t.add(abs(time, "ABS_MT_POSITION_Y", rawY(f[i][1] + 20 * step * dir[i][1])));
+            }
+            if (step == 3) {
+                // ...and a fourth finger lands in slot 3 at (910, 950): only X differs from the slot's last contact.
+                t.add(abs(time, "ABS_MT_SLOT", 3));
+                t.add(abs(time, "ABS_MT_TRACKING_ID", 101));
+                t.add(abs(time, "ABS_MT_POSITION_X", rawX(910)));
+            }
+            t.add(syn(time));
+        }
+        for (int i = 0; i < 4; i++) {
+            t.add(abs(2.2, "ABS_MT_SLOT", i));
+            t.add(abs(2.2, "ABS_MT_TRACKING_ID", -1));
+        }
+        t.add(syn(2.2));
+        List<GeteventReplay.Touch> touches =
+                new GeteventReplay(DEFAULTS, 0).replay(new StringReader(String.join("\n", t)));
+        assertEquals(2, touches.size());
+        assertEquals(4, touches.get(1).contacts);
+        assertEquals(4, touches.get(1).maxDown);
+        assertEquals(Arrays.asList("1 CANCEL NONE 3+0 fourth-finger"), summary(touches));
     }
 
     @Test

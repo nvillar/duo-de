@@ -1,4 +1,4 @@
-From cae01b9873adee12c85147c33d71e231f34508f5 Mon Sep 17 00:00:00 2001
+From a88b58059ac869d67345c107cdc1df0e1a7f7afd Mon Sep 17 00:00:00 2001
 From: Nicolas Villar <15879262+nvillar@users.noreply.github.com>
 Date: Wed, 4 Nov 2026 22:58:42 -0800
 Subject: [PATCH] Duo: three-finger gesture recognizer, logging only
@@ -20,19 +20,23 @@ the winner must beat the other measure 2:1 (across the panels the pinch must be 
 translation across the hinge, and swipes with fingers on both panels are cancelled), every finger must
 agree with it, and a push must be across the hinge (not along it) and toward the other panel. Otherwise
 the gesture is cancelled with a reason. Fingers may start moving while the others land (300 ms), and are
-measured from where they landed. Touches starting in an edge-swipe zone (outer edges and hinge-side
-edges 24 dp, top 32 dp, bottom 48 dp) are ineligible; contacts on the hinge band or the display boundary
+measured from where they landed. Touches starting in an edge-swipe zone (outer and hinge-side edges
+24 dp, top 32 dp, bottom 48 dp) are ineligible; contacts on the hinge band or the display boundary
 (controller artefacts, fingers parked after sliding off an edge) are ignored, and a finger reaching the
 boundary counts as lifted. A recognised gesture is followed to the first lift and reported as COMMIT, or as
-CANCEL reversed if it went back below half its threshold. Works for every rotation (the axis is the one
-across the hinge) and needs both panels on the display (spanned or gapless).
+CANCEL reversed if it went back below half its threshold. A pointer up with FLAG_CANCELED (palm
+rejection) cancels the touch (pointer-cancelled) instead of counting as a lift, so it never commits. Works
+for every rotation (the axis is the one across the hinge) and needs both panels on the display (spanned
+or gapless).
 
 DuoThreeFingerGestureMonitor (CoreStartable, DuoGestureModule in ReferenceSystemUIModule) feeds it
-from a gesture input monitor on the default display. It never pilfers pointers, so input delivery is
-unchanged. Off by default; runs only on a Duo with sys.duode.panels.active=1 and
-`settings put global duode_three_finger_gestures 1`; `duode_three_finger_gestures_config` overrides
-thresholds (for example "pinchDp=30,swipeDp=60"); both apply without a restart. Touches starting on the
-keyguard and touches with a stylus are reported as cancelled. One log line per result, tag DuoGesture:
+from a gesture input monitor on the default display, with each event's FLAG_CANCELED. It never pilfers
+pointers, so input delivery is unchanged. Off by default; runs only on a Duo with
+sys.duode.panels.active=1 and `settings put global duode_three_finger_gestures 1`;
+`duode_three_finger_gestures_config` overrides thresholds (for example "pinchDp=30,swipeDp=60"); both
+apply without a restart. The settings are read again once the asynchronous observer registration has
+completed, so a change made during startup is not lost. Touches starting on the keyguard and touches with
+a stylus are reported as cancelled. One log line per result, tag DuoGesture:
 
   event=RECOGNIZED gesture=SPAN motion=pinch-out split=3+0 target=0 to=-1 pinchPx=+108 scale=1.60
   acrossPx=+9 alongPx=-20 ms=1040 rot=0 reason=pinch
@@ -40,23 +44,24 @@ keyguard and touches with a stylus are reported as cancelled. One log line per r
 dumpsys activity service com.android.systemui/.SystemUIService
 com.android.systemui.duo.gesture.DuoThreeFingerGestureMonitor shows the state and the last 20 results.
 
-Host tests: DuoThreeFingerClassifierTests (java_test_host, 35 cases on synthetic touch streams: every
-gesture, rotations 1-3, gapless, edge zones, fourth finger, bounce, reversal, keyguard, single panel).
-The DUO-DE harness also replays raw getevent captures from a Duo 1 through the classifier
-(tools/duo-gesture). Not built in an Android tree or run on a device yet; the SystemUI classes were
-type-checked against the r4 SystemUI-core and framework header jars, without Dagger processing.
+Host tests: DuoThreeFingerClassifierTests (java_test_host, 36 cases on synthetic touch streams: every
+gesture, rotations 1-3, gapless, edge zones, fourth finger, bounce, reversal, cancelled pointer-ups,
+keyguard, single panel). The DUO-DE harness also replays raw getevent captures from a Duo 1 through the
+classifier (tools/duo-gesture). Not built in an Android tree or run on a device yet; the SystemUI
+classes were type-checked against the r4 SystemUI-core and framework header jars, without Dagger
+processing.
 
 Co-authored-by: Copilot App <223556219+Copilot@users.noreply.github.com>
 ---
  packages/SystemUI/Android.bp                  |   7 +
  .../dagger/ReferenceSystemUIModule.java       |   2 +
  .../duo/gesture/DuoGestureModule.java         |  33 +
- .../duo/gesture/DuoThreeFingerClassifier.java | 814 ++++++++++++++++++
- .../gesture/DuoThreeFingerGestureMonitor.java | 221 +++++
+ .../duo/gesture/DuoThreeFingerClassifier.java | 827 ++++++++++++++++++
+ .../gesture/DuoThreeFingerGestureMonitor.java | 224 +++++
  .../SystemUI/tests/DuoGestureTests/Android.bp |  15 +
- .../gesture/DuoThreeFingerClassifierTest.java | 395 +++++++++
- .../systemui/duo/gesture/TouchScript.java     | 200 +++++
- 8 files changed, 1687 insertions(+)
+ .../gesture/DuoThreeFingerClassifierTest.java | 419 +++++++++
+ .../systemui/duo/gesture/TouchScript.java     | 214 +++++
+ 8 files changed, 1741 insertions(+)
  create mode 100755 packages/SystemUI/src/com/android/systemui/duo/gesture/DuoGestureModule.java
  create mode 100755 packages/SystemUI/src/com/android/systemui/duo/gesture/DuoThreeFingerClassifier.java
  create mode 100755 packages/SystemUI/src/com/android/systemui/duo/gesture/DuoThreeFingerGestureMonitor.java
@@ -143,10 +148,10 @@ index 000000000..2cc19f770
 +}
 diff --git a/packages/SystemUI/src/com/android/systemui/duo/gesture/DuoThreeFingerClassifier.java b/packages/SystemUI/src/com/android/systemui/duo/gesture/DuoThreeFingerClassifier.java
 new file mode 100755
-index 000000000..6678c7c2a
+index 000000000..2e468c411
 --- /dev/null
 +++ b/packages/SystemUI/src/com/android/systemui/duo/gesture/DuoThreeFingerClassifier.java
-@@ -0,0 +1,814 @@
+@@ -0,0 +1,827 @@
 +/*
 + * Copyright (C) 2026 The Duo-DE Project
 + *
@@ -549,6 +554,19 @@ index 000000000..6678c7c2a
 +     */
 +    public void onTouchEvent(int action, int actionIndex, long timeMs, int count, int[] ids, float[] xs,
 +            float[] ys) {
++        onTouchEvent(action, actionIndex, timeMs, count, ids, xs, ys, false);
++    }
++
++    /**
++     * As above, with {@code canceled} set when the event has {@code MotionEvent.FLAG_CANCELED}. On a pointer up
++     * that means the pointer was cancelled (palm rejection, for example), not lifted: the touch is given up
++     * ({@code pointer-cancelled}) instead of ending or committing a gesture.
++     */
++    public void onTouchEvent(int action, int actionIndex, long timeMs, int count, int[] ids, float[] xs,
++            float[] ys, boolean canceled) {
++        if (canceled && (action == ACTION_POINTER_UP || action == ACTION_UP) && mState != IDLE) {
++            cancelTouch("pointer-cancelled", timeMs);
++        }
 +        switch (action) {
 +            case ACTION_DOWN:
 +                reset();
@@ -963,10 +981,10 @@ index 000000000..6678c7c2a
 +}
 diff --git a/packages/SystemUI/src/com/android/systemui/duo/gesture/DuoThreeFingerGestureMonitor.java b/packages/SystemUI/src/com/android/systemui/duo/gesture/DuoThreeFingerGestureMonitor.java
 new file mode 100755
-index 000000000..f2c44c916
+index 000000000..99851e023
 --- /dev/null
 +++ b/packages/SystemUI/src/com/android/systemui/duo/gesture/DuoThreeFingerGestureMonitor.java
-@@ -0,0 +1,221 @@
+@@ -0,0 +1,224 @@
 +/*
 + * Copyright (C) 2026 The Duo-DE Project
 + *
@@ -1083,8 +1101,11 @@ index 000000000..f2c44c916
 +                update();
 +            }
 +        };
-+        mGlobalSettings.registerContentObserverAsync(SETTING_ENABLED, observer);
-+        mGlobalSettings.registerContentObserverAsync(SETTING_CONFIG, observer);
++        // Registration completes on a background scope; read the settings again once it has, so that a change
++        // made in between is not lost.
++        Runnable registered = () -> mMainHandler.post(this::update);
++        mGlobalSettings.registerContentObserverAsync(SETTING_ENABLED, observer, registered);
++        mGlobalSettings.registerContentObserverAsync(SETTING_CONFIG, observer, registered);
 +        update();
 +        Log.i(TAG, "ready on " + Build.DEVICE + ": panelsActive=" + mPanelsActive + " enabled=" + mEnabled
 +                + " (settings put global " + SETTING_ENABLED + " 1)");
@@ -1148,7 +1169,7 @@ index 000000000..f2c44c916
 +            onlyFingers &= event.getToolType(i) == MotionEvent.TOOL_TYPE_FINGER;
 +        }
 +        mClassifier.onTouchEvent(event.getActionMasked(), event.getActionIndex(), event.getEventTime(), count,
-+                mIds, mXs, mYs);
++                mIds, mXs, mYs, (event.getFlags() & MotionEvent.FLAG_CANCELED) != 0);
 +        if (!onlyFingers) mClassifier.cancelTouch("non-finger", event.getEventTime());
 +    }
 +
@@ -1211,10 +1232,10 @@ index 000000000..07e358924
 +}
 diff --git a/packages/SystemUI/tests/DuoGestureTests/src/com/android/systemui/duo/gesture/DuoThreeFingerClassifierTest.java b/packages/SystemUI/tests/DuoGestureTests/src/com/android/systemui/duo/gesture/DuoThreeFingerClassifierTest.java
 new file mode 100755
-index 000000000..2f6d91af8
+index 000000000..084af884d
 --- /dev/null
 +++ b/packages/SystemUI/tests/DuoGestureTests/src/com/android/systemui/duo/gesture/DuoThreeFingerClassifierTest.java
-@@ -0,0 +1,395 @@
+@@ -0,0 +1,419 @@
 +/*
 + * Copyright (C) 2026 The Duo-DE Project
 + *
@@ -1562,6 +1583,30 @@ index 000000000..2f6d91af8
 +    }
 +
 +    @Test
++    public void aCancelledPointerUpCancelsInsteadOfCommitting() {
++        // Recognised, then the first finger to leave is cancelled (palm rejection), not lifted.
++        TouchScript after = three(new TouchScript(), P0[0], P0[1], 150).spread(20, 200).cancelPointer(0).upAll();
++        assertEquals(list("RECOGNIZED SPAN 0 pinch", "CANCEL SPAN 0 pointer-cancelled"), after.summary());
++        TouchScript push = three(new TouchScript(), P0[0], P0[1], 150).moveAll(20, 400, 0).cancelPointer(2)
++                .upAll();
++        assertEquals(list("RECOGNIZED PUSH 0>1 swipe", "CANCEL PUSH 0>1 pointer-cancelled"), push.summary());
++        // Three fingers, undecided: reported at once, and the rest of the touch is ignored.
++        TouchScript undecided = three(new TouchScript(), P0[0], P0[1], 150).cancelPointer(1).down(1, 545, 975)
++                .spread(20, 200).upAll();
++        assertEquals(list("CANCEL NONE pointer-cancelled"), undecided.summary());
++        // Fewer than three fingers: the touch is ineligible, reported when it ends if three came down.
++        TouchScript collecting = new TouchScript().down(0, 675, 750).down(1, 545, 975).cancelPointer(1)
++                .down(1, 545, 975).down(2, 805, 975).spread(20, 200).upAll();
++        assertEquals(list("CANCEL NONE pointer-cancelled"), collecting.summary());
++        // A cancelled last pointer after the gesture ended changes nothing, and the next touch is independent.
++        TouchScript last = three(new TouchScript(), P0[0], P0[1], 150).spread(20, 200).up(0).up(1)
++                .cancelPointer(2);
++        three(last, P1[0], P1[1], 150).spread(20, 200).upAll();
++        assertEquals(list("RECOGNIZED SPAN 0 pinch", "COMMIT SPAN 0 lift", "RECOGNIZED SPAN 1 pinch",
++                "COMMIT SPAN 1 lift"), last.summary());
++    }
++
++    @Test
 +    public void consecutiveTouchesAreIndependent() {
 +        TouchScript s = three(new TouchScript(), P0[0], P0[1], 150).moveAll(20, -400, 0).upAll();
 +        three(s, P1[0], P1[1], 150).spread(20, 200).upAll();
@@ -1612,10 +1657,10 @@ index 000000000..2f6d91af8
 +}
 diff --git a/packages/SystemUI/tests/DuoGestureTests/src/com/android/systemui/duo/gesture/TouchScript.java b/packages/SystemUI/tests/DuoGestureTests/src/com/android/systemui/duo/gesture/TouchScript.java
 new file mode 100755
-index 000000000..f2fca3056
+index 000000000..efb68e5e6
 --- /dev/null
 +++ b/packages/SystemUI/tests/DuoGestureTests/src/com/android/systemui/duo/gesture/TouchScript.java
-@@ -0,0 +1,200 @@
+@@ -0,0 +1,214 @@
 +/*
 + * Copyright (C) 2026 The Duo-DE Project
 + *
@@ -1708,6 +1753,16 @@ index 000000000..f2fca3056
 +        return this;
 +    }
 +
++    /** A pointer up with FLAG_CANCELED: the pointer was cancelled (palm rejection), not lifted. */
++    TouchScript cancelPointer(int id) {
++        mTime += 10;
++        int action = mPointers.size() == 1 ? DuoThreeFingerClassifier.ACTION_UP
++                : DuoThreeFingerClassifier.ACTION_POINTER_UP;
++        send(action, indexOf(id), true);
++        mPointers.remove(id);
++        return this;
++    }
++
 +    TouchScript cancel() {
 +        mTime += 10;
 +        send(DuoThreeFingerClassifier.ACTION_CANCEL, 0);
@@ -1787,6 +1842,10 @@ index 000000000..f2fca3056
 +    }
 +
 +    private void send(int action, int actionIndex) {
++        send(action, actionIndex, false);
++    }
++
++    private void send(int action, int actionIndex, boolean canceled) {
 +        int n = mPointers.size();
 +        int[] ids = new int[n];
 +        float[] xs = new float[n];
@@ -1798,7 +1857,7 @@ index 000000000..f2fca3056
 +            ys[i] = mPointers.get(id)[1];
 +            i++;
 +        }
-+        classifier.onTouchEvent(action, actionIndex, mTime, n, ids, xs, ys);
++        classifier.onTouchEvent(action, actionIndex, mTime, n, ids, xs, ys, canceled);
 +    }
 +
 +    long time() {

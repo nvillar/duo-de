@@ -48,7 +48,8 @@ No TalkBack or per-app exclusions; one global on/off setting.
 
 Other reasons: `no-decision` (three fingers lifted without moving, such as a three-finger tap),
 `lifted-before-decision`, `input-cancelled` (the touch was cancelled, for example when another gesture pilfered
-it).
+it), `pointer-cancelled` (a pointer up with `FLAG_CANCELED`, such as palm rejection: the pointer was cancelled,
+not lifted, so it never commits a gesture).
 
 ## Enabling it
 
