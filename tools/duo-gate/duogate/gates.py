@@ -475,11 +475,8 @@ def gate_g5(ctx: Ctx) -> None:
                     "their panels", required=1)
     fold = ctx.check("G5.foldKeyboard", "G5", "Fold to one panel with the keyboard up (real fold)", required=1,
                      manual=True)
-    if ctx.pre.get("ime", {}).get("show_ime_with_hard_keyboard") != "1" and \
-            not any("show_ime_with_hard_keyboard" in a for a in ctx.pre.get("test_settings", [])):
-        for c in list(chks.values()) + [touch, rot]:
-            c.skip("soft keyboard suppressed (show_ime_with_hard_keyboard != 1, F9)")
-        return
+    # show_ime_with_hard_keyboard is left at the device's value (recorded in the preconditions): forcing it could mask
+    # IME defects. A keyboard that does not show on the first tap is a G5 failure, not a reason to skip.
     try:
         pair = setup_pair(ctx, PAIR_KEYS, "G5.setup")
     except SetupError as e:

@@ -19,9 +19,9 @@ PROBE_HOME = PROBE_PACKAGE + "/.ProbeHomeActivity"
 PROBE_PROTOCOL = "gate-2"
 PANEL_PROPS = ("persist.sys.phh.duo.panels", "persist.debug.phh.duo.panels")
 
-# (namespace, key, value the gate needs, why)
+# (namespace, key, value the gate needs, why). show_ime_with_hard_keyboard is deliberately not here: it is recorded in
+# the preconditions and left at the device's value, because forcing it could mask IME defects.
 TEST_SETTINGS = [
-    ("secure", "show_ime_with_hard_keyboard", "1", "soft keyboard with the Duo input device (F9)"),
     ("global", "stay_on_while_plugged_in", "7", "keep the screen on during the run"),
     ("system", "accelerometer_rotation", "0", "deterministic rotation 0"),
     ("system", "user_rotation", "0", "deterministic rotation 0"),

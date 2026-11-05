@@ -405,6 +405,8 @@ class Sim:
         if cmd == "input keyevent 3":
             self.home()
             return ""
+        if cmd.startswith("input text "):
+            return ""          # the simulated probe has no editors: no text event (input not received)
         m = re.match(r"input swipe (\d+) (\d+) (\d+) (\d+)", cmd)
         if m:
             x1, y1, x2, y2 = (int(g) for g in m.groups())
@@ -438,6 +440,7 @@ class Sim:
                 if key == "user_rotation":
                     for t in self.tasks:
                         self.emit(probe("onConfigurationChanged", t, "display=0 rotation=%s" % value))
+                        self.emit(targets_for(t))
             else:
                 self.settings.pop((ns, key), None)
             return ""

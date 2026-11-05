@@ -63,11 +63,14 @@ Exit code: 0 PASS, 1 FAIL, 2 INCOMPLETE, 3 usage error.
 1. **Preflight** (recorded in `preconditions.json` before anything changes; `restore.json` written first): build
    identity (`ro.build.display.id`, incremental, `ro.duode.*`), probe/Launcher3/SystemUI paths, SHA-256 of the probe
    APK, `services.jar`, `framework.jar`; both panel properties, `sys.duode.panels.active` and the panel areas actually
-   present; HOME; Recents component; IME (default, enabled, `show_ime_with_hard_keyboard`); navigation mode; density;
+   present; HOME; Recents component; IME (default, enabled, `show_ime_with_hard_keyboard`, recorded only); navigation
+   mode; density;
    physical/override size; display offset; committed device state; rotation settings; secure-lock credential type
    (only the type is stored); operator confirmation of the dual posture.
-2. **Test settings** (recorded, restored at the end): `show_ime_with_hard_keyboard=1` (F9), `stay_on_while_plugged_in=7`,
-   `accelerometer_rotation=0`, `user_rotation=0`, HOME = `org.duode.probe/.ProbeHomeActivity`.
+2. **Test settings** (recorded, restored at the end): `stay_on_while_plugged_in=7`, `accelerometer_rotation=0`,
+   `user_rotation=0`, HOME = `org.duode.probe/.ProbeHomeActivity`. IME settings are never changed
+   (`show_ime_with_hard_keyboard` stays at the device's value: forcing it could mask IME defects; a keyboard that does
+   not appear on the first tap fails G5).
 3. **Gates** in order G1, G1L, G2, G4, G5, G6, G3, G7, PO, G9 (only those selected). Probe test tasks are removed
    between setups (`am stack remove`, verified in the dumps).
 4. **Restore** settings and HOME and read them back (also on errors). Panel properties are never changed except by PO,

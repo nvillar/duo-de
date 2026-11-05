@@ -30,7 +30,7 @@ class SimRun(unittest.TestCase):
         dev.remove_wait = 0
         fake.sim = Sim(dev.log, bugs)
         op = Operator(interactive=False)
-        return gates.Ctx(dev, op, reps, {"navigation_mode": "2", "ime": {"show_ime_with_hard_keyboard": "1"}}), fake
+        return gates.Ctx(dev, op, reps, {"navigation_mode": "2", "ime": {"show_ime_with_hard_keyboard": "0"}}), fake
 
     def statuses(self, ctx):
         return {c.id: c.status for c in ctx.checks}
@@ -139,6 +139,17 @@ class SimRun(unittest.TestCase):
         gv = report.gate_verdicts(checks, ["G1", "G2"], {"G1": "device lost", "G2": "not run"})
         self.assertEqual(gv["G1"]["status"], INCOMPLETE)
         self.assertEqual(gv["G2"]["status"], INCOMPLETE)
+
+    def test_g5_runs_with_the_device_ime_setting(self):
+        # show_ime_with_hard_keyboard=0 (device default) is not a reason to skip G5; the simulated probe has no IME,
+        # so the IME checks must come out FAIL/INCOMPLETE, never PASS and never skipped
+        ctx, fake = self.ctx(reps=1)
+        gates.gate_g5(ctx)
+        ime = [c for c in ctx.checks if c.id.startswith("G5.ime.")]
+        self.assertEqual(len(ime), 4)
+        self.assertTrue(all(c.skipped is None and c.attempts for c in ime), [c.to_json() for c in ime])
+        self.assertTrue(all(c.status != PASS for c in ime))
+        self.assertFalse(any("show_ime" in c for c in fake.sim.commands))
 
     def test_g6_without_secure_lock_is_not_run(self):
         ctx, _ = self.ctx()

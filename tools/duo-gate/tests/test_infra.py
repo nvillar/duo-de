@@ -159,6 +159,13 @@ class CliRun(unittest.TestCase):
             pre = json.load(f)
         self.assertEqual(pre["panels"]["areas"], ["Panel0", "Panel0Tasks", "Panel1", "Panel1Tasks"])
         self.assertTrue(pre["test_settings"])
+        # the IME setting is recorded, never overridden (it could mask IME defects)
+        self.assertEqual(pre["ime"]["show_ime_with_hard_keyboard"], "0")
+        self.assertFalse(any("show_ime" in s for s in pre["test_settings"]), pre["test_settings"])
+        self.assertFalse(any("show_ime_with_hard_keyboard" in c for c in sim.commands if c.startswith("settings put")))
+
+    def test_ime_setting_is_never_a_test_setting(self):
+        self.assertNotIn("show_ime_with_hard_keyboard", [k for _, k, _, _ in preconditions.TEST_SETTINGS])
 
     def test_old_probe_stops_the_run_before_any_change(self):
         orig = Sim.shell
