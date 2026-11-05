@@ -2,7 +2,7 @@
 
 How to set up a workstation to build, flash and test DUO-DE for the first-generation Surface Duo.
 
-The whole flow below has been run end to end on Windows 11 with a WSL2 distribution named `duo-build`: the Podman build container, source sync, `--unshallow` (full history and the `android-16.0.0_r1`-`r3` tags), patch application, a clean vanilla build, flashing the image with fastboot (after a userdata wipe, coming from a release-keyed image), and a `--with-probe` developer image whose DuoProbe app ran on a Duo 1.
+The whole flow below has been run end to end on Windows 11 with a WSL2 distribution named `duo-build`: the Podman build container, source sync, `--unshallow` (full history and the `android-16.0.0_r1`-`r3` tags), patch application, a clean vanilla build, flashing with fastboot (with `fastboot -w` coming from the release-keyed image, and without a wipe between developer images), and a `--with-probe` developer image whose DuoProbe app ran on a Duo 1.
 
 Related: [dual-screen plan](dual-screen-plan.md), [M1 gate runbook](gate-m1.md), [M1 gate report](m1-gate-report.md).
 
@@ -233,7 +233,7 @@ Container settings are environment variables of `dev/podman.sh`: `DUO_DEV_MEMORY
 
 Developer builds set `ro.system.ota.json_url` to `https://ota-disabled.invalid/duo-de-dev/ota.json`, a reserved domain that never resolves, so the in-ROM updater can never install an upstream OTA over a developer build. `ro.duode.dev_build=true` marks such images.
 
-They are signed with the public AOSP test keys. Release images are signed with the upstream maintainer's private keys, which are not available. Moving between a release image and a developer image therefore needs a userdata wipe (see 6). Developer images share the test keys, so flashing one over another does not normally require a wipe.
+They are signed with the public AOSP test keys. Release images are signed with the upstream maintainer's private keys, which are not available. Moving between a release image and a developer image therefore needs a userdata wipe (see 6). Developer images share the test keys; flashing one over another keeps userdata.
 
 ### 5.4 Refreshing the pinned manifest
 
@@ -293,7 +293,7 @@ Verify the checksum on Windows before flashing:
 
 ## 6. Flashing a system image
 
-From Windows, with the Duo booted to Android:
+From Windows, with the Duo booted to Android. Between developer images (same AOSP test keys), flash without a wipe; data, settings and persisted properties are kept:
 
 ```powershell
 adb reboot fastboot
@@ -303,7 +303,17 @@ fastboot flash system_<slot> <image>.img
 fastboot reboot
 ```
 
-Moving from stock Android 12L, or between differently signed builds (an upstream release-keyed image and a test-keyed developer image, in either direction), needs a userdata wipe: apps and settings from the previous image do not carry over. When recovery reports that Android cannot load, choose **Factory data reset** with the volume keys, confirm with Power, then **Reboot system now**. The first boot afterwards takes several minutes.
+From a differently signed image (an upstream release-keyed DUO-DE image to a test-keyed developer image, or back), wipe userdata in the same fastboot session, after flashing and before rebooting:
+
+```powershell
+fastboot flash system_<slot> <image>.img
+fastboot -w
+fastboot reboot
+```
+
+On the Duo, `fastboot -w` prints `Erasing 'metadata' OKAY` and then `Erase successful, but not automatically formatting. File system type raw not supported.`; that message is expected. Android resets userdata itself on the first boot (about 35 s extra). Afterwards, accept the USB debugging prompt on the device again: the wipe removes the stored adb authorization.
+
+Fallback: if a boot after a signing change instead stops in recovery (for example *Can't load Android system*), choose **Factory data reset** with the volume keys, confirm with Power, then **Reboot system now**. Moving from stock Android 12L follows the README's flashing steps.
 
 Keep the bootloader **unlocked** while running custom images; relocking can prevent the device from booting.
 

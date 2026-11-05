@@ -421,8 +421,8 @@ Status vocabulary: *implemented* (patch exists) → *built* → *device-verified
 | F6 | Single-screen: WM has no active-side input; right-only shows left panel's app; other side not parked | Device-verified failure → M2.1. Verified in posture service source: both single-screen sides map to the same DeviceState ID (FOLDED); DeviceState is requested before size/offset/composition, not as one transaction; manual posture selection bypasses that path. |
 | F7 | Recents: whole-display Overview; selection reparents task into the spanned area; taskbar centred on hinge | Device-verified failure → **M2.2 first**. Contract (§3): selection goes to the **invoking** panel; document any exception. |
 | F8 | `showWhenLocked` in a panel does not occlude keyguard | Device-verified functional failure → M2.3 (keyguard occlusion is per display in r4). |
-| F9 | Soft keyboard suppressed by default (an input device is treated as a hardware keyboard) | Device-verified. Base-image workaround (`show_ime_with_hard_keyboard` default) **separate from** root-causing the input device; never overwrite a user's later choice. |
-| F10 | IME: right→left editor focus needs a second tap | Device-verified → M2.4. **Corrected:** non-target apps reporting `imeVisible=true` with zero insets is documented `WindowInsets.isVisible()` semantics, not a defect. Home/spanned windows receiving IME insets must be audited by target/occlusion, **not** suppressed wholesale (spanning editors need avoidance). |
+| F9 | ~~Soft keyboard suppressed by default (an input device is treated as a hardware keyboard)~~ | **Withdrawn.** No physical keyboard is present: `dumpsys input` lists only the Virtual input device and the configuration reports `nokeys`. With the default `show_ime_with_hard_keyboard=0` the soft keyboard appears on the first tap. The gate observation was F10. No base-image keyboard-default change. |
+| F10 | IME: right→left editor focus needs a second tap | Device-verified → M2.4. Left→right and same-panel focus changes show the keyboard on the first tap; this asymmetry is the real keyboard defect. **Corrected:** non-target apps reporting `imeVisible=true` with zero insets is documented `WindowInsets.isVisible()` semantics, not a defect. Home/spanned windows receiving IME insets must be audited by target/occlusion, **not** suppressed wholesale (spanning editors need avoidance). |
 | F11 | No active WebView provider by default; WebView is Chromium 133 | Device-verified → base-image track (§13). |
 | F12 | Hinge semantics: Duo 1 overlay declares `fold-[1392,0,1392,1800]` (zero-width fold), not the physical 84 px hinge; Settings splits at 1392; Launcher3 page indicator in the hinge band | Source mismatch verified; Settings causal link to be verified at runtime. **Topology-contract item in M2.1/M2.5** (real-gap feature, window-local transforms, `config_device_state_postures`), not only cosmetic. |
 | F13 | Rare hinge anomaly (low readings without hall closure, then 4°→304°) | Unexplained; unreproduced in 5 trials. First add combined logging (hinge, OEM posture, hall, requested/applied composition, size/offset, timestamps). No angle filter until the cause is understood: composition is driven by OEM posture, and a jump filter can reject legitimate recovery. |
@@ -432,6 +432,7 @@ Status vocabulary: *implemented* (patch exists) → *built* → *device-verified
 | F17 | Unmerged upstream work overlaps ours | Integrated with authorship. Upstream coordination is useful but does **not** gate M2. |
 | F18 | Nothing pushed; work on 3 local branches | Done in M2.0: tags `m0-baseline-image` and `m1-gate-image` mark the exact built commits; harness, M1 fixes and gate prototype consolidated on branch `duo-integration`, pushed to `nvillar/duo-de`. |
 | F19 | No Microsoft recovery ZIP; stock partitions deleted | Open. Retained images ≠ tested rollback: record artifacts, partition/slot layout and which recovery steps were actually exercised. |
+| F20 | Context-free launches land in the spanned area: LatinIME's permission activity and the runtime permission dialog opened 2784 px wide in DefaultTaskDisplayArea | Device-verified → M2.5 (context-free launch policy, §3 "Notifications and context-free launches"). |
 
 ### 16.2 M2 order
 
@@ -458,11 +459,11 @@ Framework integration (Recents routing, parking, Home restoration, keyguard visi
 
 **M2.4 IME.** Fix asymmetric editor-focus transfer. Verify input, control/layering targets, rendering, touch regions and app avoidance agree; unrelated panel tasks must not resize. Specify conservative behaviour for a keyboard covering part of a spanning window's bottom edge. Rotate/fold with the keyboard open, including a `configChanges` app.
 
-**M2.5 Production policy closure and regression coverage.** Explicit TDA/external-display precedence; new/reused/child/context-free/notification launches; unsupported workspace modes (split/freeform/desktop) in panel mode; Home-minimize vs posture-park ownership; task/process restoration; minimal move/span/unspan as task transactions (polished controls stay in M3) preserving identity/back stack and the fold/re-span cancellation rule; PaneManager functional coverage (F3); panel-off behaviour unchanged.
+**M2.5 Production policy closure and regression coverage.** Explicit TDA/external-display precedence; new/reused/child/context-free/notification launches (context-free launches currently land in the spanned area, F20); unsupported workspace modes (split/freeform/desktop) in panel mode; Home-minimize vs posture-park ownership; task/process restoration; minimal move/span/unspan as task transactions (polished controls stay in M3) preserving identity/back stack and the fold/re-span cancellation rule; PaneManager functional coverage (F3); panel-off behaviour unchanged.
 
 **M2.6 Hardening + acceptance.** F13 logging, F12 cosmetic overlaps, F14 watch, full gate coverage on one integration image, Astra-reviewed.
 
-**Base-image track (parallel authoring).** WebView default + LineageOS WebView + Jelly; on-screen keyboard default (F9 workaround) and input-device root cause.
+**Base-image track (parallel authoring).** WebView default + LineageOS WebView + Jelly. No keyboard-default change (F9 withdrawn).
 
 M2 exit: §6 M2 exit criteria + §16.2 items + full F15 coverage on a single integration image.
 
