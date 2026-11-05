@@ -213,7 +213,7 @@ class HomeTargetsWithoutLog(unittest.TestCase):
         dev = Device(fake, tmp, "t", settle=0.05, quiet=0, screens="none", live=False)
         dev.remove_wait = 0
         fake.sim = Sim(dev.log, {"focused_dump"})
-        fake.sim.ui_xml = sim.fixture("probe-home-gate2-uiautomator.xml")
+        fake.sim.ui_xml = sim.fixture("probe-home-gate3-uiautomator.xml")
         dev.log.lines.clear()                      # the home's targets event rolled out of the log buffer
         return gates.Ctx(dev, Operator(interactive=False), 1, {"navigation_mode": "2"}), fake, tmp
 
@@ -361,7 +361,7 @@ class AstraReview69fc(unittest.TestCase):
         dev = Device(fake, tmp, "t", settle=0.05, quiet=0, screens="none", live=False)
         dev.remove_wait = 0
         fake.sim = Sim(dev.log, {"focused_dump"})
-        fake.sim.ui_xml = sim.fixture("probe-home-gate2-uiautomator.xml")
+        fake.sim.ui_xml = sim.fixture("probe-home-gate3-uiautomator.xml")
         return gates.Ctx(dev, Operator(interactive=False), 1, {"navigation_mode": "2"}), fake
 
     def home_event(self, fake, event, rest=""):
