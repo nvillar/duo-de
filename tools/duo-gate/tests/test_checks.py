@@ -314,6 +314,15 @@ class Keyguard(unittest.TestCase):
         self.assertEqual(v.status, FAIL)
         self.assertTrue(any("input focus" in r for r in v.reasons), v.reasons)
 
+    def test_focused_application_alone_is_not_input_exposure(self):
+        # r4 routes keys to the focused window; FocusedApplications may still name the underlying activity
+        events, _ = window(sim.marker("r.1"))
+        inp = sim.inputdump([self.a, self.b], self.b, True)
+        self.assertIn("t21}'", inp)
+        v = C.eval_locked(events, self.locked_snap(inp=inp), (21,), 20)
+        self.assertEqual(v.status, PASS, v.reasons)
+        self.assertTrue(any("diagnostic" in n for n in v.notes), v.notes)
+
     def test_missing_input_focus_is_not_a_pass(self):
         events, _ = window(sim.marker("r.1"))
         inp = sim.inputdump([self.a, self.b], None, True).replace("name='671cb1b NotificationShade'", "name=''")

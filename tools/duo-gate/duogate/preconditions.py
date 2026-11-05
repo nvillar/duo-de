@@ -167,9 +167,16 @@ def restore(dev, data: dict, reboot: bool = False) -> Verdict:
             v.note("%s restored to %r" % (k, want))
         else:
             v.fail("%s=%r, could not restore the recorded %r (persist.sys.* needs adb root)" % (k, got, want))
-    active = data.get("active")
-    if active is not None and _try(lambda: adb.getprop("sys.duode.panels.active")) != active:
-        reboot_needed = True
+    active, source = expected_active(data)
+    if active is None:
+        v.incomplete("recorded panel mode unknown (no 'active' and no panel properties in the record): the effective "
+                     "mode cannot be verified")
+    else:
+        if source != "recorded":
+            v.note("expected panel mode %r %s" % (active, source))
+        now = _try(lambda: adb.getprop("sys.duode.panels.active"))
+        if not (now == active or (_off(now) and _off(active))):
+            reboot_needed = True
     if reboot_needed:
         if not reboot:
             v.incomplete("panel mode differs from the recorded boot state; a reboot applies the restored properties: "
@@ -180,8 +187,10 @@ def restore(dev, data: dict, reboot: bool = False) -> Verdict:
                 time.sleep(REBOOT_SETTLE)
                 adb.wait_for_boot()
                 now = adb.getprop("sys.duode.panels.active")
-                if active is not None and now != active:
-                    v.fail("after reboot sys.duode.panels.active=%r, recorded %r" % (now, active))
+                if active is None:
+                    v.incomplete("rebooted, but the expected panel mode is unknown")
+                elif not (now == active or (_off(now) and _off(active))):
+                    v.fail("after reboot sys.duode.panels.active=%r, expected %r" % (now, active))
                 else:
                     v.note("rebooted to apply the restored panel properties")
             except AdbError as e:
@@ -189,6 +198,27 @@ def restore(dev, data: dict, reboot: bool = False) -> Verdict:
     return v
 
 
+def expected_active(data: dict) -> tuple[str | None, str]:
+    """The effective panel mode (sys.duode.panels.active) the device must end in. Records written before the field
+    existed fall back to preconditions.json (merged by load_restore), then to the recorded panel properties, so a
+    pending reboot is never forgotten between two restore invocations."""
+    if isinstance(data.get("active"), str):
+        return data["active"], data.get("active_source", "recorded")
+    panels = data.get("panels") or {}
+    if panels and all(isinstance(x, str) for x in panels.values()):
+        return ("1" if any(x == "1" for x in panels.values()) else "0"), "derived from the recorded panel properties"
+    return None, "unknown"
+
+
 def load_restore(outdir: str) -> dict:
     with open(os.path.join(outdir, "restore.json"), encoding="utf-8") as f:
-        return json.load(f)
+        data = json.load(f)
+    if "active" not in data:
+        try:
+            with open(os.path.join(outdir, "preconditions.json"), encoding="utf-8") as f:
+                active = json.load(f).get("panels", {}).get("sys.duode.panels.active")
+            if isinstance(active, str):
+                data["active"], data["active_source"] = active, "from preconditions.json (legacy record)"
+        except (OSError, ValueError):
+            pass
+    return data

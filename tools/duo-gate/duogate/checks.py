@@ -480,7 +480,9 @@ def eval_locked(events: list[ProbeEvent], snap, ordinary_tasks, showwhenlocked_t
                     v.fail("ordinary task %d has WM focus while locked" % fw.task_id)
         if inp is not None:
             if inp.focused_app_task in ordinary_tasks:
-                v.fail("input dispatcher focused application is ordinary task %d while locked" % inp.focused_app_task)
+                # FocusedApplications is ANR/wait context only; keys go to the focused window (checked below)
+                v.note("input dispatcher focused application is ordinary task %d (diagnostic only)"
+                       % inp.focused_app_task)
             if inp.focused_window_hash is None:
                 v.incomplete("input dispatcher focused window missing or unresolvable (%r)" % inp.focused_window)
             else:

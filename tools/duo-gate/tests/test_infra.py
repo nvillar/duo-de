@@ -122,6 +122,41 @@ class Restore(unittest.TestCase):
                                              "panels": {"persist.sys.phh.duo.panels": "1"}})
         self.assertEqual(v.status, FAIL)
 
+    def test_legacy_record_cannot_forget_a_pending_reboot(self):
+        # record from <= 8a97d66 (no 'active'); PO was interrupted: properties off, panel mode off this boot
+        sim = self.fake.sim
+        sim.props["persist.debug.phh.duo.panels"] = "0"
+        sim.props["sys.duode.panels.active"] = "0"
+        legacy = {"home": "a.b/.C", "settings": {}, "panels": {"persist.sys.phh.duo.panels": "",
+                                                              "persist.debug.phh.duo.panels": "1"}}
+        first = preconditions.restore(self.dev, dict(legacy))
+        self.assertEqual(first.status, INCOMPLETE, first.reasons)
+        self.assertEqual(sim.props["persist.debug.phh.duo.panels"], "1")
+        # the second invocation finds the properties already right but must still apply the panel mode
+        preconditions.REBOOT_SETTLE, old = 0, preconditions.REBOOT_SETTLE
+        try:
+            second = preconditions.restore(self.dev, dict(legacy), reboot=True)
+        finally:
+            preconditions.REBOOT_SETTLE = old
+        self.assertEqual(second.status, PASS, second.reasons)
+        self.assertEqual((sim.reboots, sim.props["sys.duode.panels.active"]), (1, "1"))
+        # and without authorization it never reports complete while the mode is not applied
+        sim.props["sys.duode.panels.active"] = "0"
+        self.assertEqual(preconditions.restore(self.dev, dict(legacy)).status, INCOMPLETE)
+
+    def test_legacy_record_takes_the_mode_from_preconditions(self):
+        with open(os.path.join(self.tmp, "restore.json"), "w", encoding="utf-8") as f:
+            json.dump({"home": "a.b/.C", "settings": {}, "panels": {"persist.debug.phh.duo.panels": "1"}}, f)
+        with open(os.path.join(self.tmp, "preconditions.json"), "w", encoding="utf-8") as f:
+            json.dump({"panels": {"sys.duode.panels.active": "1"}}, f)
+        data = preconditions.load_restore(self.tmp)
+        self.assertEqual(preconditions.expected_active(data)[0], "1")
+        self.assertIn("preconditions.json", preconditions.expected_active(data)[1])
+
+    def test_unknown_mode_is_never_complete(self):
+        v = preconditions.restore(self.dev, {"home": "a.b/.C", "settings": {}})
+        self.assertEqual(v.status, INCOMPLETE)
+
     def test_unknown_home_is_not_guessed(self):
         v = preconditions.restore(self.dev, {"home": "android/com.android.internal.app.ResolverActivity",
                                              "settings": {}, "panels": {}})
