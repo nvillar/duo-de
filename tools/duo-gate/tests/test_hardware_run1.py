@@ -82,7 +82,7 @@ class M22StuckBack(unittest.TestCase):
         first = " ".join(back.attempts[0].reasons)
         self.assertIn("lost input", first)
         self.assertIn("transformed", first)
-        self.assertTrue(any("pair re-created" in n for n in back.attempts[0].notes), back.attempts[0].notes)
+        self.assertTrue(any("pair re-created" in r for r in back.attempts[0].reasons), back.attempts[0].reasons)
         for a in back.attempts[1:]:
             # each later repetition ran on a fresh pair: no inherited 'touch reached the probe HOME'
             self.assertFalse(any("ProbeHomeActivity" in r for r in a.reasons), a.reasons)
@@ -197,6 +197,158 @@ class M22PanelOff(unittest.TestCase):
         self.assertEqual(fake.sim.reboots, 2)                          # the properties are still restored + applied
         self.assertEqual(fake.sim.props["persist.debug.phh.duo.panels"], "1")
         self.assertTrue(all("after reboot" in (c.skipped or "") for c in ctx.checks), [c.skipped for c in ctx.checks])
+
+
+
+class HomeTargetsWithoutLog(unittest.TestCase):
+    """Second hardware run (duogate-20261104-231722-b139): the probe home had logged its targets before the log
+    buffer window, so the tool fell back to uiautomator. That works right after Home, but once a probe task on the
+    other panel is focused uiautomator dumps only that window: 'no probe home buttons'. Positions found once are now
+    kept until the home lays out again."""
+
+    def ctx(self):
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp, True)
+        fake = FakeAdb()
+        dev = Device(fake, tmp, "t", settle=0.05, quiet=0, screens="none", live=False)
+        dev.remove_wait = 0
+        fake.sim = Sim(dev.log, {"focused_dump"})
+        fake.sim.ui_xml = sim.fixture("probe-home-gate2-uiautomator.xml")
+        dev.log.lines.clear()                      # the home's targets event rolled out of the log buffer
+        return gates.Ctx(dev, Operator(interactive=False), 1, {"navigation_mode": "2"}), fake, tmp
+
+    def test_pair_setup_uses_the_positions_found_while_the_home_was_focused(self):
+        ctx, fake, _ = self.ctx()
+        pair = gates.setup_pair(ctx, gates.PAIR_KEYS, "G4.setup")
+        self.assertNotEqual(pair["A"], pair["B"])
+        self.assertEqual(fake.sim.ui_dumps, 1)       # one dump, while the home was focused
+
+    def test_relayout_of_the_home_invalidates_the_cache(self):
+        ctx, fake, tmp = self.ctx()
+        dev = ctx.dev
+        self.assertIn("A.probeTest", dev.home_targets())
+        gates.launch_from_home(ctx, "A", "probeTest", "launch")        # focus moves to the probe test on A
+        fake.sim.emit(sim.probe("onConfigurationChanged", sim.HOME_TASK, "display=0 rotation=0",
+                                act="ProbeHomeActivity@77"))
+        with self.assertRaises(EvidenceError) as cm:
+            dev.home_targets()
+        self.assertIn("focused window", str(cm.exception))
+        self.assertEqual(fake.sim.ui_dumps, 2)
+        import os
+        extra = sorted(os.listdir(os.path.join(tmp, "extra")))
+        self.assertEqual(extra, ["home-targets-uiautomator-1.txt", "home-targets-uiautomator-2.txt"])
+        with open(os.path.join(tmp, "extra", extra[1]), encoding="utf-8") as f:
+            text = f.read()
+        self.assertIn("org.duode.probe", text)
+        self.assertNotIn("Editor", text)             # no on-screen text is stored
+
+    def test_a_newer_targets_event_wins(self):
+        ctx, fake, _ = self.ctx()
+        dev = ctx.dev
+        dev.home_targets()
+        fake.sim.emit(sim.probe("targets", sim.HOME_TASK, "A.probeTest=[40,500][1310,660]",
+                                act="ProbeHomeActivity@77"))
+        self.assertEqual(dev.home_targets()["A.probeTest"], Rect(40, 500, 1310, 660))
+        self.assertEqual(fake.sim.ui_dumps, 1)
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+class AstraReviewF261(unittest.TestCase):
+    """Astra (high) on 4e80dbe + f261c9d."""
+
+    def tmpctx(self, bugs=(), reps=2):
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp, True)
+        fake = FakeAdb()
+        dev = Device(fake, tmp, "t", settle=0.05, quiet=0, screens="none", live=False)
+        dev.remove_wait = 0
+        fake.sim = Sim(dev.log, set(bugs))
+        return gates.Ctx(dev, Operator(interactive=False), reps, {"navigation_mode": "2"}), fake
+
+    # H1 -----------------------------------------------------------------------------------------------------------
+    def test_reused_tasks_without_input_fail_g2(self):
+        ctx, fake = self.tmpctx({"reuse_loses_input"})
+        gates.gate_g2(ctx)
+        s = {c.id: c for c in ctx.checks}
+        self.assertEqual(s["G2.restore.A"].status, FAIL, s["G2.restore.A"].to_json())
+        self.assertEqual(s["G2.restore.B"].status, FAIL)
+        self.assertTrue(any("empty touchable region" in r for a in s["G2.restore.A"].attempts for r in a.reasons))
+        from duogate import report
+        g = report.gate_verdicts([c.to_json() for c in ctx.checks], ["G2"], {})
+        self.assertEqual(g["G2"]["status"], FAIL)
+
+    def test_broken_pair_found_at_clean_up_fails_the_attempt(self):
+        ctx, fake = self.tmpctx()
+        pair = gates.setup_pair(ctx, gates.PAIR_KEYS, "s")
+        check = ctx.check("X", "G", "t", required=1)
+        from duogate.model import Verdict
+        check.add(Verdict())                                  # the attempt's own assertions passed
+        next(t for t in fake.sim.tasks if t.tid == pair["B"]).empty_region = True
+        old = dict(pair)
+        gates.restore_pair(ctx, pair, gates.PAIR_KEYS, "clean", check)
+        self.assertEqual(check.status, FAIL)
+        self.assertTrue(any("not reachable by input" in r for r in check.attempts[0].reasons))
+        self.assertNotEqual(pair, old)                        # re-created for the next repetition
+
+    def test_broken_pair_without_a_check_is_not_silent(self):
+        ctx, fake = self.tmpctx()
+        pair = gates.setup_pair(ctx, gates.PAIR_KEYS, "s")
+        next(t for t in fake.sim.tasks if t.tid == pair["A"]).empty_region = True
+        with self.assertRaises(gates.SetupError):
+            gates.restore_pair(ctx, pair, gates.PAIR_KEYS, "clean")
+
+    # H2 -----------------------------------------------------------------------------------------------------------
+    def region_snap(self, region):
+        text = sim.fixture("g4-before-input.txt")
+        old = "touchableRegion=[1434,0][2784,1800]"
+        i = text.index("name=960d37a ")
+        j = text.index(old, i)
+        return Snap(windows=sim.fixture("g4-before-windows.txt"), input=text[:j] + "touchableRegion=" + region
+                    + text[j + len(old):])
+
+    def test_empty_region_with_normal_flags_fails(self):
+        self.assertEqual(C.eval_input_ok(self.region_snap("[1434,0][2784,1800]"), 51, "B").status, PASS)
+        v = C.eval_input_ok(self.region_snap("<empty>"), 51, "B")
+        self.assertEqual(v.status, FAIL)
+        self.assertEqual(C.eval_input_ok(self.region_snap("[1434,0][2000,900]"), 51, "B").status, FAIL)
+        self.assertEqual(C.eval_input_ok(self.region_snap("SkRegion((1434,0,2784,1800))"), 51, "B").status,
+                         INCOMPLETE)
+
+    def test_eval_back_with_the_other_region_empty_fails(self):
+        a, b = Task(50, "ProbeTestActivity", "A"), Task(51, "ProbeOtherTestActivity", "B")
+        a.stopped, b.empty_region = True, True
+        buf = LogBuffer()
+        for raw in (sim.marker("r.1"), sim.probe("onPause", a), sim.probe("onStop", a)):
+            buf.feed(raw)
+        self.assertEqual(C.eval_back(buf.events(0), snap_for([a, b]), "A", 50, 51).status, FAIL)
+
+    # M1 -----------------------------------------------------------------------------------------------------------
+    def test_stale_bounds_on_the_other_panel_send_no_input(self):
+        ctx, fake = self.tmpctx({"scroll_targets"})
+        t = Task(50, "ProbeTestActivity", "A")
+        fake.sim.tasks.append(t)
+        fake.sim.emit(sim.probe("targets", t, "title=[2000,260][2600,341]"))
+        with self.assertRaises(EvidenceError) as cm:
+            ctx.dev.task_point(50, "title", "A")
+        self.assertIn("not on the requested panel", str(cm.exception))
+        self.assertFalse(any(c.startswith("input ") for c in fake.sim.commands), fake.sim.commands)
+
+    def test_drag_endpoints_stay_in_the_panel_content(self):
+        ctx, fake = self.tmpctx({"scroll_targets"})
+        t = Task(50, "ProbeTestActivity", "A")
+        fake.sim.tasks.append(t)
+        fake.sim.emit(sim.targets_for(t))
+        fake.sim.emit(sim.probe("insets", t, "imeVisible=true ime=[0,0,0,1008] bars=[0,220,0,1008] cutout=null"))
+        ctx.dev.task_point(50, "editor2", "A")
+        import re
+        for c in fake.sim.commands:
+            m = re.match(r"input swipe (\d+) (\d+) (\d+) (\d+)", c)
+            if m:
+                x0, y0, x1, y1 = (int(g) for g in m.groups())
+                self.assertTrue(0 < x0 < 1350 and 0 < x1 < 1350, c)
+                self.assertTrue(220 <= y0 <= 792 and 220 <= y1 <= 792, c)
 
 
 if __name__ == "__main__":

@@ -180,8 +180,10 @@ def eval_launch(events: list[ProbeEvent], snap, side: str, *, label: str, act_cl
         v.note("multiWindow=%s" % r.kv.get("multiWindow"))
     if area == "panel":
         v.merge(check_placement(snap, tid, side, geo))
+        v.merge(eval_input_ok(snap, tid, side, geo))
     else:
         v.merge(check_default_area(snap, tid, geo))
+        v.merge(eval_input_ok(snap, tid, None, geo, want=geo.display))
     v.merge(check_not_policy_hidden(snap, tid))
     return v, tid
 
@@ -297,10 +299,12 @@ def eval_home(lines: list[LogLine], events: list[ProbeEvent], snap, home_side: s
     return v
 
 
-def eval_input_ok(snap, task_id: int, side: str, geo: Geometry = DUO1) -> Verdict:
-    """The task's on-screen window takes touches where its panel is: the input dispatcher lists it touchable with
-    its panel as frame (no leftover animation transform, not dropped from input). A WM-visible window that the
-    input dispatcher does not route to is the 'other panel unusable' failure."""
+def eval_input_ok(snap, task_id: int, side: str | None, geo: Geometry = DUO1, want: Rect | None = None) -> Verdict:
+    """The task's on-screen window takes touches where its panel is: the input dispatcher lists it touchable (flags)
+    with its panel as frame and as touchable region (no leftover animation transform, not dropped from input, not
+    an empty or partial touchable region). A WM-visible window that the input dispatcher does not route to is the
+    'other panel unusable' failure. Missing or unparsable region evidence is never a pass. `want` overrides the
+    expected rectangle (the display, for the default task area)."""
     v = Verdict()
     ww = _snap(lambda: snap.windows, v, "window windows")
     inp = _snap(lambda: snap.input, v, "input")
@@ -309,7 +313,7 @@ def eval_input_ok(snap, task_id: int, side: str, geo: Geometry = DUO1) -> Verdic
     wins = [w for w in ww.values() if w.task_id == task_id and w.on_screen]
     if not wins:
         return v.incomplete("no on-screen window of task %d" % task_id)
-    want = geo.panel(side)
+    want = want or geo.panel(side)
     for w in wins:
         handles = [iw for iw in inp.windows if iw.hash == w.hash]
         if not handles:
@@ -322,6 +326,18 @@ def eval_input_ok(snap, task_id: int, side: str, geo: Geometry = DUO1) -> Verdic
         elif iw.frame != want:
             v.fail("task %d input frame %s, expected its panel %s (transformed, e.g. a stuck animation)"
                    % (task_id, iw.frame, want))
+        else:
+            region = iw.touchable_region
+            if region == "<empty>":
+                v.fail("task %d window %s has an empty touchable region: its panel lost input" % (task_id, w.hash))
+            else:
+                try:
+                    r = Rect.parse(region)
+                except EvidenceError:
+                    v.incomplete("task %d window %s: touchable region %r not understood" % (task_id, w.hash, region))
+                else:
+                    if r != want:
+                        v.fail("task %d touchable region %s, expected its panel %s" % (task_id, r, want))
     return v
 
 

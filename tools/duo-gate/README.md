@@ -156,10 +156,19 @@ probe's `targets` event is no longer in the log buffer.
   is not taken as a gesture scrolls the probe) or covered by the keyboard is first dragged into view slowly (no
   fling); DuoProbe **gate-3** reports the new position after the scroll. With gate-2 such a tap is INCOMPLETE ("DuoProbe
   gate-3 needed") instead of landing on the keyboard or off screen.
-- Home and Back checks also require the other panel's task to stay reachable by input at its panel (input dispatcher
-  window touchable, frame = panel), and Back requires the gestured task not to be left transformed. After every
-  Home/Back repetition the pair is checked the same way; a broken pair is saved (`extra/*-broken-window.txt`,
-  `*-broken-wmshell.txt`), noted on the attempt and re-created, so later repetitions do not inherit it.
+- Every probe task launched or restored from the home, and the other panel's task in Home and Back checks, must stay
+  reachable by input at its panel: the input dispatcher lists its window with touchable flags, frame = panel and
+  touchable region = panel (`<empty>` or partial -> FAIL, a region format not understood -> INCOMPLETE). Back also
+  requires the gestured task not to be left transformed. After every Home/Back repetition (and its clean-up relaunch)
+  the pair is checked the same way; a broken pair is saved (`extra/*-broken-window.txt`, `*-broken-wmshell.txt`),
+  **fails that repetition**, and is re-created so later repetitions do not inherit it.
+- A tap or scroll drag is never sent outside the requested panel: bounds that do not intersect it are refused before
+  any input, and both drag endpoints must lie in its visible content band.
+- Probe home positions: the home logs `targets` only when its layout changes, so on a home that has been running for
+  a while the event can be gone from the log buffer. The uiautomator fallback only sees the focused window (it works
+  right after Home, not once a probe task has focus), so positions found once in a run are kept until the home logs
+  a relayout (`onCreate`, `layout`, `onConfigurationChanged`, `onDestroy`, `targets`). Each fallback writes
+  `extra/home-targets-uiautomator-<n>.txt` (control names and bounds, or the dumped window's packages; never text).
 - Minimize evidence accepts the policy's reasons `Home`, `Home from Recents` and `Recents #<n>` (M2.2, fw 0018);
   `DuoRecents` lines are kept in `logcat.txt`.
 - PO dismisses a non-secure keyguard after each of its reboots (recorded in `preconditions.keyguard_after_reboot`); with

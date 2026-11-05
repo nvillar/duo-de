@@ -114,6 +114,11 @@ class Attempt:
     marker: str | None = None
     evidence: list[str] = field(default_factory=list)
 
+    def fail(self, reason: str) -> None:
+        """Evidence found after the attempt was recorded (e.g. the state it left behind) that contradicts it."""
+        self.status = FAIL
+        self.reasons.append("FAIL: " + reason)
+
     def to_json(self) -> dict:
         return {"index": self.index, "status": self.status, "reasons": self.reasons, "notes": self.notes,
                 "marker": self.marker, "evidence": self.evidence}

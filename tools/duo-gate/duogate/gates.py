@@ -120,8 +120,8 @@ def relaunch(ctx: Ctx, side: str, key: str, task: int, name: str) -> Verdict:
 def restore_pair(ctx: Ctx, pair: dict, keys: dict, name: str, check: Check | None = None) -> None:
     """After Home/Back: relaunch any pair task that is hidden or stopped, so the next repetition starts clean. If a
     visible pair task is not reachable by input at its panel (an animation left it transformed, or its window was
-    dropped from input), the evidence is saved and the pair is re-created (`pair` is updated in place): later
-    repetitions must not inherit a broken state, and the attempt that caused it already recorded the failure."""
+    dropped from input), the evidence is saved, the last attempt of `check` is failed with it, and the pair is
+    re-created (`pair` is updated in place) so later repetitions do not inherit the broken state."""
     dev = ctx.dev
     snap = dev.snap(name + "-check", kinds=("activities",))
     acts = snap.activities
@@ -129,24 +129,30 @@ def restore_pair(ctx: Ctx, pair: dict, keys: dict, name: str, check: Check | Non
         t = acts.task(pair[side])
         if t is None:
             raise SetupError("task %d (side %s) lost" % (pair[side], side))
+    broken = []
+    for side in SIDES:
+        t = acts.task(pair[side])
         states = {a.state for a in t.activities}
         if t.force_hidden & C.POLICY_HIDDEN or not t.visible or "RESUMED" not in states:
             v = relaunch(ctx, side, keys[side], pair[side], "%s.%s" % (name, side))
             if not v.ok:
-                raise SetupError("could not restore side %s: %s" % (side, "; ".join(v.reasons)))
+                broken += ["relaunch on %s: %s" % (side, r) for r in v.reasons]
     snap = dev.snap(name + "-input", kinds=("windows", "input"))
-    broken = []
     for side in SIDES:
         v = C.eval_input_ok(snap, pair[side], side, dev.geo)
         if not v.ok:
-            broken += v.reasons
+            broken += [r for r in v.reasons if r not in broken]
     if broken:
         files = [dev.save_text(name + "-broken-window", dev.adb.shell("dumpsys window", timeout=60)),
                  dev.save_text(name + "-broken-wmshell", dev.adb.shell(
                      "dumpsys activity service SystemUIService WMShell", timeout=60, check=False))]
-        msg = "pair re-created: device left in a broken state (%s); evidence %s" % ("; ".join(broken), ", ".join(files))
-        if check is not None and check.attempts:
-            check.attempts[-1].notes.append(msg)
+        msg = ("after this repetition and its clean-up relaunch the pair is not reachable by input (%s); evidence %s; "
+               "pair re-created" % ("; ".join(broken), ", ".join(files)))
+        if check is None or not check.attempts:
+            raise SetupError(msg)
+        # the repetition (or the relaunch that restored its tasks) left the device broken: that attempt fails,
+        # whatever its own assertions saw; the pair is then re-created so the next repetition starts clean
+        check.attempts[-1].fail(msg)
         pair.update(setup_pair(ctx, keys, name + ".recreate"))
 
 
@@ -387,7 +393,7 @@ def gate_g2(ctx: Ctx) -> None:
             if held["unrecognized"] and op.interactive:
                 # The automated attempt stays as recorded (INCOMPLETE); the operator's real gesture is a separate,
                 # manual check: it can FAIL on contradicting evidence but never PASS.
-                restore_pair(ctx, pair, PAIR_KEYS, tag + ".manual.clean")
+                restore_pair(ctx, pair, PAIR_KEYS, tag + ".manual.clean", cross[s])
 
                 def attempt_manual(s=s, o=o, tag=tag):
                     v, ev, _ = focus_by_touch(ctx, o, pair[o], (pair[s],), tag + ".manual.focusOther")
@@ -469,7 +475,7 @@ def gate_g4(ctx: Ctx) -> None:
                 v.note("operator saw no Back on the hinge edge (record as behaviour, see plan F15)")
             return v, ev + ["marker " + mid] + snap.files, mid
         _record(hinge[s], attempt_hinge)
-        restore_pair(ctx, pair, PAIR_KEYS, "G4.hinge.%s.clean" % s)
+        restore_pair(ctx, pair, PAIR_KEYS, "G4.hinge.%s.clean" % s, hinge[s])
 
         def attempt_cancel(s=s, o=o):
             mid, start = dev.mark("G4.cancel.%s" % s)
@@ -491,7 +497,7 @@ def gate_g4(ctx: Ctx) -> None:
             v.note("operator: animation within panel = %s" % inside)
             return v, ["marker " + mid] + snap.files, mid
         _record(cancel[s], attempt_cancel)
-        restore_pair(ctx, pair, PAIR_KEYS, "G4.cancel.%s.clean" % s)
+        restore_pair(ctx, pair, PAIR_KEYS, "G4.cancel.%s.clean" % s, cancel[s])
 
 
 # ---------------------------------------------------------------------------------------------------------------------

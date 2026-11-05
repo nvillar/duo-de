@@ -39,6 +39,7 @@ class Task:
         self.stopped = False
         self.scroll = 0                 # content scrolled up by this many px
         self.no_input = False           # window dropped from input (stuck cross-task Back)
+        self.empty_region = False       # normal flags and frame, but touchableRegion=<empty>
         self.input_frame = None         # input frame left transformed (stuck predictive Back preview)
 
     @property
@@ -201,7 +202,8 @@ def inputdump(tasks: list[Task], focus: Task | None, keyguard: bool = False, tou
                    "frame=%s, globalScale=1, applicationInfo.name=, applicationInfo.token=<null>, "
                    "touchableRegion=%s, ownerPid=5000, ownerUid=10190"
                    % (i + 1, t.win, t.cls, 900 + i, "NOT_VISIBLE | NOT_TOUCHABLE" if hidden else "DUPLICATE_TOUCH_TO_WALLPAPER",
-                      r(t.input_frame or t.bounds), r(t.input_frame or t.bounds)))
+                      r(t.input_frame or t.bounds),
+                      "<empty>" if t.empty_region else r(t.input_frame or t.bounds)))
     return "\n".join(out) + "\n"
 
 
@@ -310,6 +312,7 @@ class Sim:
         self.home_component = "com.android.launcher3/.uioverrides.QuickstepLauncher"
         self.credential = "NONE"
         self.ui_xml = fixture("probe-home-uiautomator.xml")
+        self.ui_dumps = 0
         self.props["sys.boot_completed"] = "1"
         self.rotation = 0
         self.keyguard = False
@@ -381,6 +384,8 @@ class Sim:
         if existing and "no_reuse" not in self.bugs:
             t = existing[0]
             t.area, t.hidden, t.stopped = dest, 0, False
+            if "reuse_loses_input" in self.bugs:
+                t.empty_region = True
             self.tasks.remove(t)
             self.tasks.append(t)
             self.emit(line("DuoDisplayAreaPolicy", "Restored minimized Task{abc #%d type=standard}" % t.tid, pid=1000))
@@ -543,6 +548,10 @@ class Sim:
         if cmd.startswith("uiautomator dump"):
             return "UI hierchary dumped to: /data/local/tmp/duogate-ui.xml\n"
         if cmd == "cat /data/local/tmp/duogate-ui.xml":
+            self.ui_dumps += 1
+            if "focused_dump" in self.bugs and self.focus in self.tasks:
+                # uiautomator dumps the focused window only: a probe test task, not the home
+                return fixture("probe-test-uiautomator.xml")
             return self.ui_xml
         if cmd == "dumpsys activity containers":
             return containers(self.tasks, panels=self.props.get("sys.duode.panels.active") == "1")

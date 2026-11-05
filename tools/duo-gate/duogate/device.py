@@ -127,6 +127,8 @@ class Device:
         self.live = live
         self.remove_wait = 1.0
         self.boot_wait = 10.0
+        self._home_cache: tuple[dict, int] | None = None
+        self._ui_dumps = 0
         self.snapdir = os.path.join(outdir, "snaps")
         os.makedirs(self.snapdir, exist_ok=True)
         self.log: LogBuffer = LogBuffer() if not live else self._start_log()
@@ -143,6 +145,7 @@ class Device:
         """After a reboot the logcat process is gone; markers keep their uniqueness across captures. Everything the
         new capture replays happened after the reboot, so it all belongs to the run."""
         self._earlier += self.run_lines()
+        self._home_cache = None             # sequence numbers belong to the old capture; the home restarted anyway
         if not self.live:
             self._run_start = len(self.log.lines) - 1     # offline: keep the buffer, start a new run window
             return
@@ -239,11 +242,29 @@ class Device:
         return "dgs" + secrets.token_hex(4)
 
     # -- targets ------------------------------------------------------------------------------------------------------
+    # Probe HOME events after which its controls may have moved: a cached position is no longer trusted.
+    HOME_RELAYOUT = ("onCreate", "layout", "onConfigurationChanged", "onDestroy", "targets")
+
     def home_targets(self) -> dict[str, Rect]:
+        """The probe home's control rectangles: its latest targets event, else positions found earlier in this run
+        (targets event or uiautomator), as long as the home has not been laid out again since. The home logs targets
+        only when its layout changes, so on a long-running home that event can be gone from the log buffer; the
+        uiautomator fallback only sees the focused window, so it works right after Home but not once a probe task on
+        the other panel has focus. Hence the cache, invalidated by any home relayout event."""
         e = self.log.latest(lambda e: e.event == "targets" and e.act_class == "ProbeHomeActivity")
-        if e is not None:
-            return parsers.parse_targets(e)
-        return self.home_targets_from_ui()
+        cache = self._home_cache
+        if e is not None and (cache is None or e.seq >= cache[1]):
+            targets = parsers.parse_targets(e)
+            self._home_cache = (targets, e.seq)
+            return targets
+        if cache is not None:
+            moved = self.log.latest(lambda x: x.act_class == "ProbeHomeActivity" and x.event in self.HOME_RELAYOUT
+                                    and x.seq > cache[1])
+            if moved is None:
+                return cache[0]
+        targets = self.home_targets_from_ui()
+        self._home_cache = (targets, len(self.log.lines) - 1)
+        return targets
 
     def home_targets_from_ui(self) -> dict[str, Rect]:
         """Fallback when the probe home's targets event is no longer in the log buffer: needs the home focused.
@@ -267,11 +288,19 @@ class Device:
             if name in out:
                 raise EvidenceError("uiautomator: two %s buttons" % name)
             out[name] = n.bounds
+        nodes = parsers.parse_uiautomator(xml)
         del xml
-        self.save_text("home-targets-uiautomator",
-                       "".join("%s=%s\n" % (k, out[k]) for k in sorted(out)) or "(no probe home controls found)\n")
+        # what the dump showed, without any on-screen text: packages and probe classes of the root nodes
+        seen = sorted({n.package for n in nodes})
+        self._ui_dumps += 1
+        path = self.save_text("home-targets-uiautomator-%d" % self._ui_dumps,
+                              "".join("%s=%s\n" % (k, out[k]) for k in sorted(out))
+                              or "(no probe home controls found; dumped window packages: %s, %d nodes)\n"
+                              % (", ".join(seen), len(nodes)))
         if not out:
-            raise EvidenceError("uiautomator: no probe home buttons (is the probe home focused and visible?)")
+            raise EvidenceError("uiautomator: no probe home buttons in the focused window (packages %s; %s): the "
+                                "home logged no targets in the log buffer and is not the focused window"
+                                % (", ".join(seen), path))
         return out
 
     def task_targets(self, task_id: int) -> dict[str, Rect]:
@@ -306,10 +335,14 @@ class Device:
             r = targets.get(name)
             if r is None:
                 raise EvidenceError("target %s unknown" % name)
+            if not r.intersects(area):
+                # stale or foreign bounds: never send input (tap or drag) outside the requested panel
+                raise EvidenceError("target %s of task %d at %s is not on the requested panel %s" % (name, task_id, r,
+                                                                                                   area))
             lo, hi = self.content_band(task_id, area)
             if hi - lo < 120:
                 raise EvidenceError("no visible content band on task %d (%d..%d)" % (task_id, lo, hi))
-            seen = Rect(r.left, max(r.top, lo + 10), r.right, min(r.bottom, hi - 10))
+            seen = Rect(max(r.left, area.left), max(r.top, lo + 10), min(r.right, area.right), min(r.bottom, hi - 10))
             if seen.height >= 40 and area.contains_point(*seen.center()):
                 return seen.center()
             # scroll so that the control's centre lands in the middle of the band
@@ -318,6 +351,10 @@ class Device:
             dist = min(abs(delta), hi - lo - 80) + SCROLL_SLOP
             y0 = hi - 30 if delta > 0 else lo + 30
             y1 = y0 - dist if delta > 0 else y0 + dist
+            for px, py in ((x, y0), (x, y1)):
+                if not (area.left < px < area.right and lo <= py <= hi):
+                    raise EvidenceError("refusing a scroll drag for %s of task %d: (%d,%d) is outside the visible "
+                                        "content of %s (%d..%d)" % (name, task_id, px, py, area, lo, hi))
             before = self.log.latest(lambda e: e.event == "targets" and e.task == task_id)
             # below the fling threshold: ~80 px/s, at least 1 s
             st = self.step("scroll.%d.%s" % (task_id, name), lambda: self.swipe(x, y0, x, y1, max(1000, dist * 12)),
