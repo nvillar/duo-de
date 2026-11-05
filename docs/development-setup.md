@@ -1,7 +1,10 @@
 # DUO-DE development setup (Surface Duo 1)
 
 How to set up a workstation to build, flash and test DUO-DE for the first-generation Surface Duo.
-Steps marked *(not yet validated)* have not yet been run end to end; they will be confirmed when the first baseline build completes.
+
+The whole flow below has been run end to end on Windows 11 with a WSL2 distribution named `duo-build`: the Podman build container, source sync, `--unshallow` (full history and the `android-16.0.0_r1`-`r3` tags), patch application, a clean vanilla build, flashing the image with fastboot (after a userdata wipe, coming from a release-keyed image), and a `--with-probe` developer image whose DuoProbe app ran on a Duo 1.
+
+Related: [dual-screen plan](dual-screen-plan.md), [M1 gate runbook](gate-m1.md), [M1 gate report](m1-gate-report.md).
 
 ## 1. Requirements
 
@@ -118,6 +121,15 @@ git config user.email "<id>+<github-user>@users.noreply.github.com"
 
 The developer scripts live in `dev/`; `build/dev/pinned.xml` is the pinned developer manifest.
 
+Development happens on the `duo-integration` branch (`git checkout duo-integration`); `main-16` tracks upstream. Annotated tags mark the exact harness commits of images that were built and tested on the device:
+
+| Tag | Image | Build options |
+|---|---|---|
+| `m0-baseline-image` | `duodev.20261104183202.0b049383.baseline` (unmodified series) | `--label baseline` |
+| `m1-gate-image` | `duodev.20261105003423.bfb0d8b7.m1gate` (M1 gate prototype) | `--with-probe --label m1gate` |
+
+`git show <tag>` prints the image's SHA-256. Rebuilding a tag gives a new build id (it contains the build time), so the image checksum differs from the recorded one.
+
 ### 4.4 Build container
 
 ```bash
@@ -172,11 +184,13 @@ Run the first patch step with `--unshallow`, which fetches both, from each proje
 ```
 
 It fetches the full history of those projects only, which includes large ones such as `frameworks/base` and `frameworks/av`: expect several GB more disk and tens of minutes, depending on bandwidth and rate limiting. Tags are fetched with the refspec `+refs/tags/android-16.0.0_r*:refs/tags/android-16.0.0_r*`, and each project is recorded in `~/aosp/.duo-dev/base-tags-fetched` so later runs skip it. Without `--unshallow`, missing tags are only a warning. If a patch still fails after this, its base is not in the project's history and the patch must be regenerated (see 5.5).
-### 5.2 Build *(not yet validated end to end)*
+### 5.2 Build
 
 ```bash
 ~/duo-de/dev/podman.sh build ~/aosp
 ```
+
+Expect a clean build to take hours: 5 h 49 min (about 188k Ninja steps) on a 20-thread host with 64 GB assigned to WSL. A rebuild after changing a few framework and Launcher3 patches took 1 h 07 min there, with the default `installclean` and a new build number (about 25 min of it Soong analysis); `--no-installclean` can shorten incremental builds.
 
 `dev/build.sh` (run inside the container by `dev/podman.sh`):
 
@@ -219,7 +233,7 @@ Container settings are environment variables of `dev/podman.sh`: `DUO_DEV_MEMORY
 
 Developer builds set `ro.system.ota.json_url` to `https://ota-disabled.invalid/duo-de-dev/ota.json`, a reserved domain that never resolves, so the in-ROM updater can never install an upstream OTA over a developer build. `ro.duode.dev_build=true` marks such images.
 
-They are signed with the public AOSP test keys. Release images are signed with the upstream maintainer's private keys, which are not available. Expect to need a factory data reset when moving between a release image and a developer image.
+They are signed with the public AOSP test keys. Release images are signed with the upstream maintainer's private keys, which are not available. Moving between a release image and a developer image therefore needs a userdata wipe (see 6). Developer images share the test keys, so flashing one over another does not normally require a wipe.
 
 ### 5.4 Refreshing the pinned manifest
 
@@ -289,7 +303,7 @@ fastboot flash system_<slot> <image>.img
 fastboot reboot
 ```
 
-Moving from stock Android 12L, or to a differently signed build, needs a factory data reset. Choose **Factory data reset** in recovery if prompted.
+Moving from stock Android 12L, or between differently signed builds (an upstream release-keyed image and a test-keyed developer image, in either direction), needs a userdata wipe: apps and settings from the previous image do not carry over. When recovery reports that Android cannot load, choose **Factory data reset** with the volume keys, confirm with Power, then **Reboot system now**. The first boot afterwards takes several minutes.
 
 Keep the bootloader **unlocked** while running custom images; relocking can prevent the device from booting.
 

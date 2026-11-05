@@ -3,8 +3,9 @@
 A minimal, dependency-free app for the on-device dual-panel feasibility gates (G1 launch/reuse, G2 Home, G4 Back,
 G5 IME, G6 keyguard, G7 posture/rotation). It is an AOSP module (`Android.bp`, public SDK only, no Gradle).
 
-**Status: unbuilt.** It was written without an AOSP tree and has only been checked with a Java parser. Expect to fix
-small compile errors on the first `m DuoProbe`.
+**Status:** built in an android-16.0.0_r4 tree through `dev/build.sh --with-probe`; it was
+included in the M1 gate image (tag `m1-gate-image`) and used on a Duo 1 for the M1 gates
+([report](../../docs/m1-gate-report.md)).
 
 ## What it contains
 

@@ -5,7 +5,7 @@ image is a dev build, not a release. Device flashing, PIN changes and recovery s
 
 ## 0. What the image contains
 
-Harness branch `m1-gate-prototype` on top of the reproducible dev build harness:
+Harness branch `duo-integration` (the exact gate build is tag `m1-gate-image`) on top of the reproducible dev build harness:
 
 | Change | Purpose |
 |---|---|
@@ -23,7 +23,7 @@ Harness branch `m1-gate-prototype` on top of the reproducible dev build harness:
 
 ## 1. Build and identify the image
 
-On the build host, with the harness checked out at `m1-gate-prototype` and clean:
+On the build host, with the harness checked out at `m1-gate-image` (or `duo-integration`) and clean:
 
 ```bash
 ~/duo-de/dev/podman.sh shell ~/aosp
