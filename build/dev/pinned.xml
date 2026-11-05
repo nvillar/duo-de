@@ -47,4 +47,17 @@
   <project path="vendor/interfaces" name="TrebleDroid/vendor_interfaces" remote="github" revision="a2271d260e226e8de5cb1e8c15a229dc90c007dd" upstream="android-16.0" />
   <project path="vendor/magisk" name="phhusson/vendor_magisk" remote="github" revision="d8056f8032a0f60f365ddfe5e9fccd7eaf3a655d" upstream="android-10.0" />
   <project path="vendor/ponces" name="Ethanol10/vendor_ponces" remote="github" revision="5abba7dd063b1e227a7aed602cdfa8ecaeed31e2" upstream="android-16.0" />
+
+  <!-- LineageOS (resolved 2026-11-04, same as build/default.xml).
+       WebView: Chromium 156.0.8078.47 (patches README), package com.android.webview;
+       prebuilt/arm64/webview.apk is Git LFS object
+       sha256:1d2f61832b2596b0046cb82cf3634609ea866098d097a83fac27c35272ac726a (260835655 bytes).
+       dev/build.sh checks the checked-out apk against its LFS pointer and records both. -->
+  <remove-project name="platform/external/chromium-webview" />
+  <project path="external/chromium-webview/patches" name="LineageOS/android_external_chromium-webview_patches" remote="github" revision="ef69054c74f7d8306446969136c806738169f1e1" upstream="main">
+    <linkfile src="os_pickup.bp" dest="external/chromium-webview/Android.bp" />
+    <linkfile src="README" dest="external/chromium-webview/README" />
+  </project>
+  <project path="external/chromium-webview/prebuilt/arm64" name="LineageOS/android_external_chromium-webview_prebuilt_arm64" remote="github" revision="5de662a4d42b57a2efe4114e499d38fa3ce41f9d" upstream="main" clone-depth="1" />
+  <project path="packages/apps/Jelly" name="LineageOS/android_packages_apps_Jelly" remote="github" revision="7a032073fbdb8c48f931eff963c32b063cf0774e" upstream="lineage-23.2" />
 </manifest>

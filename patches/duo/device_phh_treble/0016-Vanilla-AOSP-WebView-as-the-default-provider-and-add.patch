@@ -1,0 +1,118 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Nicolas Villar <15879262+nvillar@users.noreply.github.com>
+Date: Wed, 4 Nov 2026 19:54:23 -0800
+Subject: [PATCH] Vanilla: AOSP WebView as the default provider, and add Jelly
+
+The vanilla image had no active WebView provider. Android 16's
+WebViewUpdateServiceImpl2 takes the provider the user chose, otherwise the
+first availableByDefault entry of config_webview_packages and nothing after
+it; treble-overlay-highpriomisc (vendor/hardware_overlay, static, priority
+8998) lists Google WebView first, which vanilla does not ship. So every
+WebView-using app failed ("No WebView installed") until
+`cmd webviewupdate set-webview-implementation com.android.webview`.
+
+generate.sh now makes the vanilla products inherit duo-vanilla.mk, which adds:
+- DuoVanillaWebViewOverlay: static RRO on android, priority 9100, whose
+  provider list is only com.android.webview (the preinstalled AOSP WebView
+  package, the LineageOS Chromium prebuilt from the DUO-DE manifest);
+- Jelly (LineageOS packages/apps/Jelly, Soong android_app, Apache-2.0),
+  which overrides Browser2.
+
+GApps products do not inherit duo-vanilla.mk and keep Google WebView first.
+The user's choice in Developer options still wins while it is valid.
+
+Co-authored-by: Copilot App <223556219+Copilot@users.noreply.github.com>
+---
+ duo-vanilla.mk                                     | 11 +++++++++++
+ duo-vanilla/WebViewOverlay/Android.bp              |  7 +++++++
+ duo-vanilla/WebViewOverlay/AndroidManifest.xml     | 10 ++++++++++
+ .../res/xml/config_webview_packages.xml            | 14 ++++++++++++++
+ generate.sh                                        |  2 +-
+ 5 files changed, 43 insertions(+), 1 deletion(-)
+ create mode 100644 duo-vanilla.mk
+ create mode 100644 duo-vanilla/WebViewOverlay/Android.bp
+ create mode 100644 duo-vanilla/WebViewOverlay/AndroidManifest.xml
+ create mode 100644 duo-vanilla/WebViewOverlay/res/xml/config_webview_packages.xml
+
+diff --git a/duo-vanilla.mk b/duo-vanilla.mk
+new file mode 100644
+index 0000000..1763f73
+--- /dev/null
++++ b/duo-vanilla.mk
+@@ -0,0 +1,11 @@
++# DUO-DE: additions for the vanilla (no GApps) variant only. generate.sh
++# inherits this file from the treble_*_?v? products; GApps products do not.
++
++# Google WebView is absent on vanilla: make the preinstalled AOSP WebView
++# (com.android.webview, the LineageOS Chromium prebuilt) the default provider.
++PRODUCT_PACKAGES += \
++    DuoVanillaWebViewOverlay
++
++# LineageOS Jelly, a basic browser on the system WebView (replaces Browser2).
++PRODUCT_PACKAGES += \
++    Jelly
+diff --git a/duo-vanilla/WebViewOverlay/Android.bp b/duo-vanilla/WebViewOverlay/Android.bp
+new file mode 100644
+index 0000000..f08faf0
+--- /dev/null
++++ b/duo-vanilla/WebViewOverlay/Android.bp
+@@ -0,0 +1,7 @@
++// DUO-DE vanilla only (device/phh/treble/duo-vanilla.mk): WebView provider list
++// with the preinstalled AOSP WebView as the default provider.
++runtime_resource_overlay {
++    name: "DuoVanillaWebViewOverlay",
++    sdk_version: "current",
++    product_specific: true,
++}
+diff --git a/duo-vanilla/WebViewOverlay/AndroidManifest.xml b/duo-vanilla/WebViewOverlay/AndroidManifest.xml
+new file mode 100644
+index 0000000..8909b3d
+--- /dev/null
++++ b/duo-vanilla/WebViewOverlay/AndroidManifest.xml
+@@ -0,0 +1,10 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!-- Above treble-overlay-highpriomisc (vendor/hardware_overlay, priority 8998),
++     which lists Google WebView first. -->
++<manifest xmlns:android="http://schemas.android.com/apk/res/android"
++    package="dev.duode.overlay.vanilla.webview">
++    <overlay
++        android:targetPackage="android"
++        android:priority="9100"
++        android:isStatic="true" />
++</manifest>
+diff --git a/duo-vanilla/WebViewOverlay/res/xml/config_webview_packages.xml b/duo-vanilla/WebViewOverlay/res/xml/config_webview_packages.xml
+new file mode 100644
+index 0000000..d0c50b8
+--- /dev/null
++++ b/duo-vanilla/WebViewOverlay/res/xml/config_webview_packages.xml
+@@ -0,0 +1,14 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!-- DUO-DE vanilla: WebView providers.
++
++     Android 16's WebViewUpdateServiceImpl2 uses the provider the user chose in
++     Developer options if it is valid, otherwise the FIRST availableByDefault
++     provider of this list, and never falls through to later entries. The
++     treble list (treble-overlay-highpriomisc) starts with Google WebView, which
++     vanilla does not ship, so a fresh vanilla install had no WebView at all.
++     Vanilla preinstalls only the AOSP WebView package (the LineageOS Chromium
++     prebuilt), so it is the only provider listed. -->
++<webviewproviders>
++    <webviewprovider description="Android System WebView" packageName="com.android.webview" availableByDefault="true">
++    </webviewprovider>
++</webviewproviders>
+diff --git a/generate.sh b/generate.sh
+index 50912a8..1272b0d 100644
+--- a/generate.sh
++++ b/generate.sh
+@@ -41,7 +41,7 @@ for part in a ab;do
+ 				fi
+ 				if [ "$apps" == "vanilla" ];then
+ 					apps_suffix="v"
+-					apps_script=''
++					apps_script='$(call inherit-product, device/phh/treble/duo-vanilla.mk)'
+ 					apps_name="vanilla"
+ 				fi
+ 				if [ "$apps" == "old" ];then
+-- 
+2.34.1
+
