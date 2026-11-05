@@ -1,6 +1,6 @@
 # First-class dual-screen support for Surface Duo 1
 
-Status: living plan. Sections 1-14 are the original proposal (2026-11-03), revised after a Claude Opus 5.5 / high architecture challenge. Sections 15-17 record the status after M0/M1 and the revised M2 plan (2026-11-04); section 16.5 lists the earlier statements they supersede. Device flashing, wipes and other destructive steps remain explicit operator decisions.
+Status: living plan. Sections 1-14 are the original proposal (2026-11-03), revised after a Claude Opus 5.5 / high architecture challenge. Sections 15-17 record the status after M0/M1 and the revised M2 plan (2026-11-04); section 18 records the decision not to distribute images; section 16.5 lists the earlier statements they supersede. Device flashing, wipes and other destructive steps remain explicit operator decisions.
 Date: 2026-11-03, updated 2026-11-04.
 Target: first-generation Surface Duo, DUO-DE Android 16 r4, vanilla.
 Repository: https://github.com/nvillar/duo-de (upstream: Archfx/duo-de).
@@ -260,7 +260,7 @@ Depends on M0-M5.
 - Record boot/sleep/wake, sustained typing, screen flipping, repeated notification launches, thermal behavior, standby drain and app switching against the same-build panel-off control.
 - Verify upgrade and fallback for the actual signing/channel configuration. Preserve provenance and remove unnecessary debug behavior; developer options are not a production safety mechanism.
 - Run relevant framework/Shell/launcher suites, accessibility checks and available compatibility tests. No claim of CTS certification without a full applicable run.
-- Publish limitations, known-good artifact hashes and recovery instructions alongside any candidate. Push and publish only with the fork owner's personal GitHub account.
+- ~~Publish limitations, known-good artifact hashes and recovery instructions alongside any candidate.~~ Superseded by §18 (no image distribution): the operator keeps provenance and checksums of the images they build; the repository publishes limitations and recovery instructions in its docs. Push only with the fork owner's personal GitHub account.
 
 Suggested release gates (proposals, not completed measurements):
 
@@ -377,7 +377,7 @@ Decision (owner-approved): no app store is planned, so updates arrive only with 
 1. Replace the stale WebView prebuilt with **LineageOS's prebuilt Chromium WebView** (`LineageOS/android_external_chromium-webview_prebuilt_arm64`, Git LFS; same `com.android.webview` package; unmodified Chromium build settings). Pin the commit and APK SHA-256 in the dev manifest; record the Chromium version in provenance.
 2. Make `com.android.webview` the default/fallback provider via a framework overlay, so fresh installs never end up with no provider. Verify with `dumpsys webviewupdate` and a WebView-using app.
 3. Add **LineageOS Jelly** (Android 16 branch `lineage-23.2`) as the basic browser; it uses the system WebView, so its engine moves with item 1. Confirm its build integration (Soong vs Gradle) on r4 and its license files before shipping.
-4. Release process: check for a newer LineageOS WebView before each image build; include license notices.
+4. Before each image build, check for a newer LineageOS WebView; credit LineageOS for the WebView and Jelly and keep their license notices. Images are built by the operator, not distributed (§18).
 
 Not chosen: Cromite (privacy/ad-block focus not needed; lags Chrome Stable; JIT off by default), Vanadium (GrapheneOS-specific), Chrome/Brave/Edge (not redistributable).
 
@@ -498,6 +498,7 @@ Branch to a full image when the dependency closure is uncertain: bootclasspath c
 - §8 slices 4–6 → order is now M2.0, M2.2 feasibility, M2.1, then M2.3/M2.4, M2.5.
 - §9 "make the architectural decision at M2" → provisional retention; closure via M2.2.
 - §7 IME assertions → per F10 correction; add cross-focused Home, real input receipt, topology generations and interrupted restoration.
+- §6 M6 "publish ... known-good artifact hashes ... alongside any candidate" and §13 "release process" → no image distribution (§18).
 
 ## 17. Astra (high) rubber-duck disposition, 2026-11-04
 
@@ -518,3 +519,13 @@ Reviewer: gpt-6-astra, high effort; read the plan, gate report, raw evidence, ga
 | Gate tool must fail closed and verify real input receipt | Accepted: §16.4. |
 | 1 h incremental was not a minimum; remount/sync acceptable with procedure | Accepted: measure warm builds; §16.3. |
 | Upstream coordination should not gate M2 | Accepted. |
+
+## 18. Decision: no image distribution
+
+Owner decision (2026-11-04), verbatim: "I don't think we want to distribute an image".
+
+- The fork (`nvillar/duo-de`) publishes source only: patches, manifests, build and test tools, and instructions. It does not publish system images, OTA feeds or other built artifacts.
+- Images are built and flashed by the operator, for their own development devices, following [development-setup.md](development-setup.md).
+- LineageOS's prebuilt Chromium WebView (and the Jelly source) is fetched from LineageOS by whoever builds, through the pinned manifest; this project does not redistribute it.
+- M6 publishing items are replaced by operator-kept provenance and checksums (each build's `provenance.txt` and `SHA256SUMS`, and annotated tags for the harness commits of images used as evidence) and by the repository's docs (limitations, recovery instructions).
+- Do not present the builds as LineageOS. Credit LineageOS for the WebView and Jelly, and keep their license notices.

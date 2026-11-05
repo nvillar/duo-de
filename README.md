@@ -176,7 +176,7 @@ These people have helped this project in some way or another, so they should be 
 
 [phhusson](https://github.com/phhusson) [AndyYan](https://github.com/AndyCGYan) [eremitein](https://github.com/eremitein) [kdrag0n](https://github.com/kdrag0n) [Peter Cai](https://github.com/PeterCxy) [haridhayal11](https://github.com/haridhayal11) [sooti](https://github.com/sooti) [Iceows](https://github.com/Iceows) [ChonDoit](https://github.com/ChonDoit) [ponces](https://github.com/ponces) [thai-ng](https://github.com/thai-ng) [farmerbb](https://github.com/farmerbb) [Ethanol10](https://github.com/Ethanol10) [mkostersitz](https://github.com/mkostersitz)
 
-The system WebView is [LineageOS's prebuilt Chromium WebView](https://github.com/LineageOS/android_external_chromium-webview_prebuilt_arm64) (Chromium, BSD-style license; its third-party notices are inside the WebView APK), and the vanilla browser is [LineageOS Jelly](https://github.com/LineageOS/android_packages_apps_Jelly) (Apache 2.0). They are updated only with image builds.
+The system WebView is [LineageOS's prebuilt Chromium WebView](https://github.com/LineageOS/android_external_chromium-webview_prebuilt_arm64) (Chromium, BSD-style license; its third-party notices are inside the WebView APK), and the vanilla browser is [LineageOS Jelly](https://github.com/LineageOS/android_packages_apps_Jelly) (Apache 2.0). They are updated only with image builds. Images built from this fork are DUO-DE, not LineageOS builds; the fork publishes source and instructions only, not images ([decision](docs/dual-screen-plan.md#18-decision-no-image-distribution)).
 
 
 ## Disclaimer
