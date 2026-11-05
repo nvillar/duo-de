@@ -39,6 +39,7 @@ duo_project_path() {
     [ "$p" == build ] && p=build/make
     [ "$p" == treble/app ] && p=treble_app
     [ "$p" == vendor/hardware/overlay ] && p=vendor/hardware_overlay
+    [ "$p" == packages/thain/rro/overlays ] && p=packages/thain/rro_overlays
     printf '%s\n' "$p"
 }
 

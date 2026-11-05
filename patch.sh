@@ -10,6 +10,7 @@ for project in $(cd $patches/patches/$tree; echo *); do
     [ "$p" == build ] && p=build/make
     [ "$p" == treble/app ] && p=treble_app
     [ "$p" == vendor/hardware/overlay ] && p=vendor/hardware_overlay
+    [ "$p" == packages/thain/rro/overlays ] && p=packages/thain/rro_overlays
     pushd $p &>/dev/null
     for patch in $patches/patches/$tree/$project/*.patch; do
         git am -3 $patch || exit

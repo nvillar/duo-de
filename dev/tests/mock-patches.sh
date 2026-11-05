@@ -121,3 +121,32 @@ fi
 git -C "$T/tree/device/phh/treble" log --format=%s | grep -q duo2 && echo "PASS check-apply continues with other projects"
 git -C "$H" checkout -q -- patches
 bash "$CA" --restore "$T/tree" >/dev/null 2>&1; run >/dev/null 2>&1
+
+# Project-name mapping: dev/lib.sh and patch.sh agree, including tree paths that contain '_'.
+(
+    # shellcheck source=/dev/null
+    source "$H/dev/lib.sh"
+    ok=true
+    for pair in platform_frameworks_base:frameworks/base platform_build:build/make treble_app:treble_app \
+        vendor_hardware_overlay:vendor/hardware_overlay device_phh_treble:device/phh/treble \
+        packages_thain_services_PostureProcessor:packages/thain/services/PostureProcessor \
+        packages_thain_rro_overlays:packages/thain/rro_overlays; do
+        got="$(duo_project_path "${pair%%:*}")"
+        [ "$got" == "${pair#*:}" ] || { echo "FAIL duo_project_path ${pair%%:*} -> $got"; ok=false; }
+    done
+    if $ok; then echo "PASS duo_project_path maps every known project"; fi
+)
+# End to end through build.sh (lib.sh mapping) and patch.sh (its own copy of the mapping).
+mk_project packages/thain/rro_overlays; mk_project packages/thain/services/PostureProcessor
+mk_patch duo packages_thain_rro_overlays packages/thain/rro_overlays rro1
+mk_patch duo packages_thain_services_PostureProcessor packages/thain/services/PostureProcessor pp1
+for p in packages/thain/rro_overlays packages/thain/services/PostureProcessor; do
+    git -C "$T/tree/$p" checkout -q --detach refs/remotes/m/android-16.0.0_r4
+done
+git -C "$H" add -A; git -C "$H" commit -qm "thain patches"
+if run >"$T/thain.out" 2>&1; then
+    git -C "$T/tree/packages/thain/rro_overlays" log --format=%s | grep -qx rro1 && echo "PASS packages_thain_rro_overlays patched in packages/thain/rro_overlays"
+    git -C "$T/tree/packages/thain/services/PostureProcessor" log --format=%s | grep -qx pp1 && echo "PASS packages_thain_services_PostureProcessor patched"
+else
+    echo "FAIL thain patch projects"; cat "$T/thain.out"
+fi
