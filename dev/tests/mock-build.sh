@@ -317,9 +317,69 @@ mk_webview_tree; echo '<manifest/>' > "$H/build/dev/pinned.xml"; : > "$REPO_LOG"
 bash "$H/dev/sync.sh" "$S" >/dev/null 2>&1 || true; [ -L "$OW/.git" ] && [ -s "$REPO_LOG" ] && [ ! -e "$S/.duo-dev/obsolete" ] \
     && echo "PASS the WebView checkout is left to repo when the manifest does not remove it" || echo "FAIL WebView kept"
 echo "$REMOVES_WEBVIEW" > "$H/build/dev/pinned.xml"
-run_steps() { sed -n '/^==== one-time migration steps/,/^==== end of steps/{/^====/d;s/^    //;p}' "$T/sync.err" > "$T/steps.sh"
-    [ -s "$T/steps.sh" ] && bash -e "$T/steps.sh"; }
-# The printed steps, then a (mocked) repo sync: everything is kept and usable.
+MIG="$S/.duo-dev/webview-migration.sh"; MARKER="$S/.duo-dev/webview-migration.incomplete"
+run_steps() { bash "$MIG"; }
+# dev/sync.sh writes the migration script, prints it in full and runs none of it.
+mk_webview_tree; bash "$H/dev/sync.sh" "$S" >/dev/null 2>"$T/sync.err" || true
+sed -n '/^==== .duo-dev\/webview-migration.sh ====$/,/^==== end of .duo-dev\/webview-migration.sh ====$/{/^====/d;p}' "$T/sync.err" | cmp -s - "$MIG" \
+    && grep -q "^    bash .*/.duo-dev/webview-migration.sh$" "$T/sync.err" && [ ! -e "$MARKER" ] && [ -L "$OW/.git" ] \
+    && echo "PASS the migration is written and printed as one script, not run" || { echo "FAIL migration script"; cat "$T/sync.err"; }
+# The script holds the tree lock: nothing happens while a sync or build holds it.
+before="$(snap)"; ( flock 8; sleep 5 ) 8>"$S/.duo-dev/lock" & sleep 1
+if bash "$MIG" >/dev/null 2>"$T/mig.err"; then echo "FAIL migration ran under the tree lock"
+elif grep -q "is running on this tree" "$T/mig.err" && [ ! -e "$MARKER" ] && [ ! -e "$S/.duo-dev/webview-nested" ] && [ "$(snap)" == "$before" ]; then
+    echo "PASS the migration refuses while the tree lock is held"
+else echo "FAIL migration under lock"; cat "$T/mig.err"; fi
+wait
+# Interrupted before each of its commands (kill -9 from a DEBUG trap): a sync
+# attempt is refused without touching the parked checkouts' index, and running
+# the script again completes the migration.
+cat > "$T/interrupt.env" <<'EOF'
+__duo_n=0
+trap '__duo_n=$((__duo_n + 1)); [ "$__duo_n" -lt "$DUO_TEST_STOP" ] || kill -9 $$' DEBUG
+EOF
+idx() { sha256sum "$S/.repo/projects/external/chromium-webview/$1.git/index" | cut -d' ' -f1; }
+mk_staged_tree() {
+    mk_webview_tree typechange
+    echo staged >> "$OW/prebuilt/METADATA"; g - "" add prebuilt/METADATA
+    echo staged >> "$OW/patches/README"; g - patches add README
+    echo staged >> "$OW/prebuilt/arm64/webview.apk"; g - prebuilt/arm64 add webview.apk
+}
+# The tree is re-created at the same path, so one generated script serves every run.
+mk_staged_tree; bash "$H/dev/sync.sh" "$S" >/dev/null 2>&1 || true; cp "$MIG" "$T/migration.sh"
+points=0; bad=0; done_early=0
+for ((n = 1; n < 200; n++)); do
+    mk_staged_tree; mkdir -p "$S/.duo-dev"; cp "$T/migration.sh" "$MIG"
+    ip=$(idx patches); ia=$(idx prebuilt/arm64)
+    if BASH_ENV="$T/interrupt.env" DUO_TEST_STOP=$n bash "$MIG" >/dev/null 2>&1; then break; fi
+    points=$((points + 1)); : > "$REPO_LOG"
+    if [ ! -e "$MARKER" ] && [ ! -e "$S/.duo-dev/webview-nested" ] && [ ! -e "$OW/.git" ] && [ -d "$OW/patches" ]; then
+        done_early=$((done_early + 1))   # stopped after its last effect: the migration is complete, sync may run
+    elif bash "$H/dev/sync.sh" "$S" >/dev/null 2>"$T/int.err" || [ -s "$REPO_LOG" ] \
+        || [ "$(idx patches)" != "$ip" ] || [ "$(idx prebuilt/arm64)" != "$ia" ]; then
+        echo "FAIL interrupted before command $n: sync not refused, or a parked checkout's index changed"; cat "$T/int.err"; bad=1; break
+    fi
+    D=""
+    if ! { { [ "$done_early" -gt 0 ] || bash "$MIG" >/dev/null 2>"$T/int.err"; } && bash "$H/dev/sync.sh" "$S" >/dev/null 2>>"$T/int.err"; } \
+        || [ "$(git -C "$OW/patches" diff --cached --name-only)" != README ] \
+        || [ "$(git -C "$OW/prebuilt/arm64" diff --cached --name-only)" != webview.apk ] \
+        || ! D=$(ls -d "$S/.duo-dev/obsolete/external-chromium-webview."* 2>/dev/null) \
+        || [ "$(git -C "$D" diff --cached --name-only 2>&1)" != prebuilt/METADATA ] \
+        || [ -e "$MARKER" ] || [ -e "$S/.duo-dev/webview-nested" ]; then
+        echo "FAIL resuming after an interruption before command $n"; cat "$T/int.err"; bad=1; break
+    fi
+done
+[ "$bad" -eq 0 ] && [ "$points" -ge 15 ] && [ "$done_early" -le 1 ] \
+    && echo "PASS interrupted before each of its $points commands: sync refused while unfinished ($done_early stop after completion), staged indexes kept, rerun completes" \
+    || { [ "$bad" -ne 0 ] || echo "FAIL only $points interruption points"; }
+# A parked checkout without the marker (e.g. moved by hand) also stops sync.
+mk_webview_tree; mkdir -p "$S/.duo-dev/webview-nested"; mv "$OW/patches" "$S/.duo-dev/webview-nested/patches"
+before="$(snap)"; : > "$REPO_LOG"
+if bash "$H/dev/sync.sh" "$S" >/dev/null 2>"$T/sync.err"; then echo "FAIL sync with a parked checkout"
+elif grep -q "parked: .duo-dev/webview-nested/patches" "$T/sync.err" && [ ! -s "$REPO_LOG" ] && [ "$(snap)" == "$before" ]; then
+    echo "PASS a parked checkout without the marker also stops sync"
+else echo "FAIL parked checkout"; cat "$T/sync.err"; fi
+# The migration, then a (mocked) repo sync: everything is kept and usable.
 mk_webview_tree typechange
 g - "" commit -q --allow-empty -m local; OLDHEAD=$(g - "" rev-parse HEAD)
 echo stashed >> "$OW/METADATA"; g - "" stash -q; g - "" branch -q keep
@@ -340,7 +400,7 @@ if run_steps >"$T/steps.out" 2>&1 && bash "$H/dev/sync.sh" "$S" >/dev/null 2>"$T
         || { echo "FAIL moved old checkout"; git -C "$D" status --porcelain=v1 --ignored || true; }
     [ "$(git -C "$OW/patches" diff --cached --name-only)" == README ] && [ "$(git -C "$OW/prebuilt/arm64" diff --name-only)" == webview.apk ] \
         && [ ! -e "$OW/.git" ] && [ "$(readlink "$OW/Android.bp")" == patches/os_pickup.bp ] && ! grep -qx external/chromium-webview "$S/.repo/project.list" \
-        && echo "PASS the LineageOS checkouts keep their staged and unstaged changes through the steps and sync" \
+        && echo "PASS the LineageOS checkouts keep their staged and unstaged changes through the migration and sync" \
         || { echo "FAIL nested checkouts after migration"; git -C "$OW/patches" status; }
     bash "$H/dev/sync.sh" "$S" >/dev/null 2>&1 && echo "PASS sync runs again after the migration"
 else echo "FAIL migration steps or the following sync"; cat "$T/steps.out" "$T/sync2.err" 2>/dev/null; fi
@@ -349,7 +409,7 @@ bash "$H/dev/sync.sh" "$S" >/dev/null 2>"$T/sync.err" && echo "FAIL sync went ah
 if run_steps >/dev/null 2>&1 && bash "$H/dev/sync.sh" "$S" >/dev/null 2>&1; then
     D=$(ls -d "$S/.duo-dev/obsolete/external-chromium-webview."* 2>/dev/null || true)
     [ "$(git -C "$D" status --porcelain 2>&1 || true)" == " M METADATA" ] && [ -f "$OW/patches/os_pickup.bp" ] && [ -f "$OW/prebuilt/arm64/webview.apk" ] \
-        && echo "PASS the steps also work before the LineageOS checkouts exist" || echo "FAIL steps without nested checkouts"
+        && echo "PASS the migration also works before the LineageOS checkouts exist" || echo "FAIL steps without nested checkouts"
 else echo "FAIL steps without nested checkouts"; cat "$T/sync.err"; fi
 rm -rf "$S"; mkdir -p "$S"; t0=$SECONDS
 if FAKE_SYNC_ERR="error: external/foo: Cannot remove project: uncommitted changes are present." bash "$H/dev/sync.sh" --attempts 3 "$S" >/dev/null 2>"$T/sync.err"; then echo "FAIL sync error ignored"

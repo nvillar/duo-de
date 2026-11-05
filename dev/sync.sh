@@ -171,13 +171,90 @@ local_work() {
     done
 }
 
-# Print a shell command, quoted, as a migration step.
-step() { printf '   '; printf ' %q' "$@"; printf '\n'; }
+# The one-time migration runs as a script that dev/sync.sh writes but never
+# runs. It holds the tree lock, creates $MIGRATION_MARKER before it parks
+# anything, can be rerun after an interruption, and removes the marker last.
+MIGRATION_SCRIPT=.duo-dev/webview-migration.sh
+MIGRATION_MARKER=.duo-dev/webview-migration.incomplete
+MIGRATION_PARK=.duo-dev/webview-nested
+
+write_migration_script() { # dest rel
+    {
+        echo '#!/bin/bash'
+        echo "# One-time DUO-DE migration of AOSP's obsolete $OLD_WEBVIEW checkout, written by"
+        echo "# dev/sync.sh at $stamp. Moves the old checkout to $1 and repairs its .git link;"
+        echo "# parks the nested LineageOS checkouts in $MIGRATION_PARK meanwhile and puts them back."
+        echo "# Deletes nothing. Holds the tree lock. If it stops, run it again: it resumes."
+        echo 'set -euo pipefail'
+        printf 'cd -- %q\n' "$TREE"
+        printf 'DEST=%q\n' "$1"
+        printf 'GITLINK=%q\n' "$2"
+        printf 'OLD=%q PARK=%q MARKER=%q\n' "$OLD_WEBVIEW" "$MIGRATION_PARK" "$MIGRATION_MARKER"
+        cat <<'EOF'
+NESTED=(patches prebuilt/arm64)
+fail() { echo "ERROR: $*" >&2; exit 1; }
+mkdir -p .duo-dev
+exec 9>.duo-dev/lock
+flock -n 9 || fail "dev/sync.sh or dev/build.sh is running on this tree; run this script again when it has finished"
+[ -e "$MARKER" ] || echo "$DEST" > "$MARKER"
+mkdir -p .duo-dev/obsolete "$PARK/prebuilt"
+touch .duo-dev/obsolete/.find-ignore
+if [ -e "$OLD/.git" ] || [ -L "$OLD/.git" ]; then
+    for p in "${NESTED[@]}"; do
+        if [ -e "$OLD/$p/.git" ] || [ -L "$OLD/$p/.git" ]; then
+            [ ! -e "$PARK/$p" ] || fail "both $OLD/$p and $PARK/$p exist; resolve by hand"
+            mv -- "$OLD/$p" "$PARK/$p"
+        fi
+    done
+    [ ! -e "$DEST" ] || fail "$DEST already exists; resolve by hand"
+    mv -- "$OLD" "$DEST"
+fi
+[ -d "$DEST" ] || fail "neither $OLD/.git nor $DEST exists; resolve by hand"
+ln -sfn -- "$GITLINK" "$DEST/.git"
+for f in README Android.bp; do
+    if [ -L "$DEST/$f" ] && [[ "$(readlink -- "$DEST/$f")" == patches/* ]]; then
+        rm -- "$DEST/$f"
+        if git -C "$DEST" ls-files --error-unmatch -- "$f" >/dev/null 2>&1; then git -C "$DEST" checkout -- "$f"; fi
+    fi
+done
+for p in "${NESTED[@]}"; do
+    if [ -e "$PARK/$p" ] || [ -L "$PARK/$p" ]; then
+        [ ! -e "$OLD/$p" ] || fail "both $OLD/$p and $PARK/$p exist; resolve by hand"
+        mkdir -p -- "$(dirname -- "$OLD/$p")"
+        mv -- "$PARK/$p" "$OLD/$p"
+    fi
+done
+rmdir -- "$PARK/prebuilt" "$PARK"
+rm -f -- "$MARKER"
+echo "WebView migration complete: old checkout in $DEST. Now rerun dev/sync.sh."
+EOF
+    } > "$MIGRATION_SCRIPT.tmp"
+    mv -- "$MIGRATION_SCRIPT.tmp" "$MIGRATION_SCRIPT"
+}
+
+# An unfinished migration: the nested checkouts may be parked, and repo would
+# re-create them (resetting their index) whatever the state of the old checkout.
+check_webview_migration() {
+    [ -e "$MIGRATION_MARKER" ] || [ -e "$MIGRATION_PARK" ] || return 0
+    {
+        echo "An earlier WebView migration has not finished:"
+        [ ! -e "$MIGRATION_MARKER" ] || echo "  - $MIGRATION_MARKER exists"
+        find "$MIGRATION_PARK" -mindepth 1 -maxdepth 2 ! -path "$MIGRATION_PARK/prebuilt" 2>/dev/null | sed 's/^/  - parked: /'
+        if [ -f "$MIGRATION_SCRIPT" ]; then
+            echo "Finish it with (it resumes where it stopped and holds the tree lock):"
+            printf '    bash %q\n' "$TREE/$MIGRATION_SCRIPT"
+        else
+            echo "$MIGRATION_SCRIPT is missing: move each parked checkout back to the same path under $OLD_WEBVIEW,"
+            echo "remove the empty $MIGRATION_PARK and $MIGRATION_MARKER, and rerun dev/sync.sh."
+        fi
+    } >&2
+    die "stopped before repo sync: repo would re-create the parked LineageOS checkouts and reset their index"
+}
 
 check_old_webview() {
     [ -e "$OLD_WEBVIEW/.git" ] || [ -L "$OLD_WEBVIEW/.git" ] || return 0
     grep -qs '<remove-project name="platform/external/chromium-webview"' .repo/local_manifests/*.xml || return 0
-    local p f t work desc dest rel nested=() links=() expected=()
+    local p f t work desc dest rel nested=() expected=()
     for p in "${NESTED_WEBVIEW[@]}"; do
         if [ -e "$OLD_WEBVIEW/$p/.git" ] || [ -L "$OLD_WEBVIEW/$p/.git" ]; then
             nested+=("$p"); expected+=("?? $p/")
@@ -187,7 +264,7 @@ check_old_webview() {
     for f in README Android.bp; do
         case "$f" in README) t=patches/README ;; *) t=patches/os_pickup.bp ;; esac
         if [ -L "$OLD_WEBVIEW/$f" ] && [ "$(readlink -- "$OLD_WEBVIEW/$f")" == "$t" ]; then
-            links+=("$f"); expected+=("?? $f" " T $f")
+            expected+=("?? $f" " T $f")
         fi
     done
     {
@@ -197,7 +274,7 @@ check_old_webview() {
         echo
         work="$(local_work "$OLD_WEBVIEW" "${expected[@]}")"
         if [ -n "$work" ]; then
-            echo "Local work in $OLD_WEBVIEW (the steps below keep it, in the moved checkout):"
+            echo "Local work in $OLD_WEBVIEW (the migration keeps it, in the moved checkout):"
             head -n 40 <<<"$work" | sed 's/^/  - /'
         else
             echo "No local work found in $OLD_WEBVIEW (status incl. ignored files, index flags, HEAD, branches, stash, worktrees)."
@@ -205,7 +282,7 @@ check_old_webview() {
         for p in "${nested[@]}"; do
             work="$(local_work "$OLD_WEBVIEW/$p")"
             [ -z "$work" ] && continue
-            echo "Local work in the LineageOS checkout $OLD_WEBVIEW/$p (the steps leave it in place):"
+            echo "Local work in the LineageOS checkout $OLD_WEBVIEW/$p (the migration puts it back in place):"
             head -n 40 <<<"$work" | sed 's/^/  - /'
         done
         echo
@@ -213,27 +290,15 @@ check_old_webview() {
             && [ "$(realpath -e -- "$OLD_WEBVIEW/.git" 2>/dev/null)" == "$(realpath -e -- "$OLD_WEBVIEW_GITDIR")" ]; then
             dest=".duo-dev/obsolete/external-chromium-webview.$stamp"
             rel="$(realpath -m --relative-to="$TREE/$dest" -- "$TREE/$OLD_WEBVIEW_GITDIR")"
-            echo "Move it aside by hand. The steps move nothing but the old checkout (to $dest, hidden from"
-            echo "Soong by .find-ignore), repair its relative .git link and keep the LineageOS checkouts at their paths:"
-            echo "==== one-time migration steps (dev/sync.sh runs none of them) ===="
-            step cd "$TREE"
-            step mkdir -p .duo-dev/obsolete .duo-dev/webview-nested/prebuilt
-            step touch .duo-dev/obsolete/.find-ignore
-            for p in "${nested[@]}"; do step mv "$OLD_WEBVIEW/$p" ".duo-dev/webview-nested/$p"; done
-            step mv "$OLD_WEBVIEW" "$dest"
-            step ln -sfn "$rel" "$dest/.git"
-            for f in "${links[@]}"; do
-                step rm -- "$dest/$f"
-                if git -C "$OLD_WEBVIEW" ls-files --error-unmatch -- "$f" >/dev/null 2>&1; then
-                    step git -C "$dest" checkout -- "$f"
-                fi
-            done
-            if [ ${#nested[@]} -gt 0 ]; then
-                step mkdir -p "$OLD_WEBVIEW/prebuilt"
-                for p in "${nested[@]}"; do step mv ".duo-dev/webview-nested/$p" "$OLD_WEBVIEW/$p"; done
-            fi
-            step rmdir .duo-dev/webview-nested/prebuilt .duo-dev/webview-nested
-            echo "==== end of steps ===="
+            write_migration_script "$dest" "$rel"
+            echo "dev/sync.sh wrote the one-time migration to $MIGRATION_SCRIPT and does not run it. It moves"
+            echo "nothing but the old checkout (to $dest, hidden from Soong by .find-ignore), repairs its relative"
+            echo ".git link, keeps the LineageOS checkouts at their paths (parked meanwhile) and deletes nothing."
+            echo "While it is unfinished, $MIGRATION_MARKER makes dev/sync.sh refuse to sync. Review it, then run:"
+            printf '    bash %q\n' "$TREE/$MIGRATION_SCRIPT"
+            echo "==== $MIGRATION_SCRIPT ===="
+            cat -- "$MIGRATION_SCRIPT"
+            echo "==== end of $MIGRATION_SCRIPT ===="
             echo "Then rerun dev/sync.sh. The moved checkout stays usable while $OLD_WEBVIEW_GITDIR and"
             echo ".repo/project-objects/platform/external/chromium-webview.git exist; delete it before those."
         else
@@ -241,12 +306,13 @@ check_old_webview() {
             elif [ -f "$OLD_WEBVIEW/.git" ]; then desc="a file: $(head -n1 -- "$OLD_WEBVIEW/.git")"
             else desc="a directory"; fi
             echo "$OLD_WEBVIEW/.git is not repo's link to $OLD_WEBVIEW_GITDIR but $desc, so dev/sync.sh has no"
-            echo "steps for it. Move $OLD_WEBVIEW out of the tree yourself (a linked worktree with 'git worktree move'),"
+            echo "migration for it. Move $OLD_WEBVIEW out of the tree yourself (a linked worktree with 'git worktree move'),"
             echo "keeping the LineageOS checkouts ${nested[*]:-(none yet)} at their paths under $OLD_WEBVIEW, then rerun dev/sync.sh."
         fi
     } >&2
     die "stopped before repo sync because of the obsolete $OLD_WEBVIEW checkout (see above and docs/development-setup.md, 5.1)"
 }
+check_webview_migration
 check_old_webview
 
 SYNC_LOG=.duo-dev/repo-sync.log
