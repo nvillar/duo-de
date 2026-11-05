@@ -1,0 +1,22 @@
+DEVICE STATE MANAGER (dumpsys device_state)
+  mCommittedState=Optional[DeviceState{identifier=2, name='OPENED', app_accessible=true, cancel_when_requester_not_on_top=false}]
+  mPendingState=Optional.empty
+  mBaseState=Optional[DeviceState{identifier=0, name='CLOSED', app_accessible=true, cancel_when_requester_not_on_top=false}]
+  mOverrideState=Optional[DeviceState{identifier=2, name='OPENED', app_accessible=true, cancel_when_requester_not_on_top=false}]
+
+Registered processes: size=5
+  0: mPid=3667
+  1: mPid=3992
+  2: mPid=4003
+  3: mPid=4276
+  4: mPid=4293
+
+Override Request active: true
+Request: mPid=3992, mRequestedState=2, mFlags=0, mStatus=ACTIVE
+
+DeviceStateProviderImpl
+  mLastReportedState = 0
+  mPowerSaveModeEnabled = false
+  mThermalStatus = 0
+  mIsLidOpen = null
+  Sensor values:

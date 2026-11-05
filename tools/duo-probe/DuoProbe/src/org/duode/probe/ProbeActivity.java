@@ -22,17 +22,24 @@ import android.content.res.Configuration;
 import android.graphics.Insets;
 import android.graphics.Rect;
 import android.os.Bundle;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.WindowInsets;
 
+import java.util.LinkedHashMap;
+import java.util.Map;
+
 /**
  * Base of the probe activities: logs the lifecycle, focus, configuration, window bounds, insets and display features
- * with {@link ProbeLog}.
+ * with {@link ProbeLog}, every touch the window receives ({@code touch}) and the on-screen rectangles of its named
+ * controls ({@code targets}), so a scripted gate can tap them and prove which task received the input.
  */
 public abstract class ProbeActivity extends Activity {
     private ExtensionsProbe mExtensions;
     private String mLastLayout;
     private String mLastInsets;
+    private String mLastTargets;
+    private final Map<String, View> mTargets = new LinkedHashMap<>();
 
     protected void log(String event, String details) {
         ProbeLog.log(this, event, details);
@@ -132,6 +139,48 @@ public abstract class ProbeActivity extends Activity {
         ProbeLog.config(this, "config");
     }
 
+    /**
+     * Real input receipt for the gate collector: logs where each touch landed (window and raw display coordinates).
+     * Only down/up/cancel, never moves.
+     */
+    @Override
+    public boolean dispatchTouchEvent(MotionEvent ev) {
+        int action = ev.getActionMasked();
+        String name = action == MotionEvent.ACTION_DOWN ? "down"
+                : action == MotionEvent.ACTION_UP ? "up"
+                : action == MotionEvent.ACTION_CANCEL ? "cancel" : null;
+        if (name != null) {
+            log("touch", "action=" + name + " x=" + Math.round(ev.getX()) + " y=" + Math.round(ev.getY())
+                    + " rawX=" + Math.round(ev.getRawX()) + " rawY=" + Math.round(ev.getRawY())
+                    + " pointers=" + ev.getPointerCount());
+        }
+        return super.dispatchTouchEvent(ev);
+    }
+
+    /** Names a control whose on-screen rectangle is logged in the {@code targets} event (no spaces in the name). */
+    protected void registerTarget(String name, View view) {
+        mTargets.put(name, view);
+    }
+
+    private void logTargets() {
+        if (mTargets.isEmpty()) return;
+        StringBuilder sb = new StringBuilder();
+        int[] loc = new int[2];
+        for (Map.Entry<String, View> e : mTargets.entrySet()) {
+            View v = e.getValue();
+            if (!v.isAttachedToWindow() || v.getWidth() == 0 || v.getHeight() == 0) continue;
+            v.getLocationOnScreen(loc);
+            Rect r = new Rect(loc[0], loc[1], loc[0] + v.getWidth(), loc[1] + v.getHeight());
+            if (sb.length() > 0) sb.append(' ');
+            sb.append(e.getKey()).append('=').append(r.toShortString());
+        }
+        String s = sb.toString();
+        if (!s.isEmpty() && !s.equals(mLastTargets)) {
+            mLastTargets = s;
+            log("targets", s);
+        }
+    }
+
     @Override
     public void onMultiWindowModeChanged(boolean isInMultiWindowMode, Configuration newConfig) {
         super.onMultiWindowModeChanged(isInMultiWindowMode, newConfig);
@@ -167,6 +216,7 @@ public abstract class ProbeActivity extends Activity {
                 mLastLayout = s;
                 log("layout", s + " " + ProbeLog.window(this));
             }
+            logTargets();
         });
         setContentView(root);
     }

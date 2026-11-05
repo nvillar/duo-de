@@ -20,7 +20,9 @@ import android.content.Intent;
 import android.content.pm.ActivityInfo;
 import android.graphics.Color;
 import android.os.Bundle;
+import android.text.Editable;
 import android.text.InputType;
+import android.text.TextWatcher;
 import android.view.View;
 import android.view.WindowInsets;
 import android.widget.Button;
@@ -29,11 +31,20 @@ import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 
+import java.util.LinkedHashSet;
+import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
 /**
  * An ordinary app window for the gates: two editors (IME gate, switching editor focus), an orientation request button,
  * IME show/hide, a launch-adjacent button and lifecycle/configuration/window logging (see {@link ProbeActivity}).
+ * Text typed into an editor is never logged; only gate sentinels ({@link #SENTINEL}) found in it are, as proof that
+ * generated input reached this task.
  */
 public class ProbeTestActivity extends ProbeActivity {
+    /** Tokens the gate collector types (adb shell input text); nothing else in an editor is ever logged. */
+    static final Pattern SENTINEL = Pattern.compile("dgs[0-9a-f]{8}");
     private static final int[] ORIENTATIONS = {
         ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED,
         ActivityInfo.SCREEN_ORIENTATION_PORTRAIT,
@@ -65,6 +76,7 @@ public class ProbeTestActivity extends ProbeActivity {
         header.setTextSize(24);
         header.setTextColor(Color.WHITE);
         column.addView(header);
+        registerTarget("title", header);
 
         mInfo = new TextView(this);
         mInfo.setTextColor(Color.WHITE);
@@ -75,24 +87,32 @@ public class ProbeTestActivity extends ProbeActivity {
         single.setHint("Editor 1: tap to type (IME gate)");
         single.setInputType(InputType.TYPE_CLASS_TEXT);
         single.setOnFocusChangeListener((v, f) -> log("editorFocus", "editor=1 focus=" + f));
+        single.addTextChangedListener(new SentinelWatcher(1));
         column.addView(single);
+        registerTarget("editor1", single);
 
         EditText multi = new EditText(this);
         multi.setHint("Editor 2: multi-line");
         multi.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
         multi.setMinLines(3);
         multi.setOnFocusChangeListener((v, f) -> log("editorFocus", "editor=2 focus=" + f));
+        multi.addTextChangedListener(new SentinelWatcher(2));
         column.addView(multi);
+        registerTarget("editor2", multi);
 
-        column.addView(button("Show IME", v -> {
+        Button showIme = button("Show IME", v -> {
             single.requestFocus();
             getWindow().getInsetsController().show(WindowInsets.Type.ime());
             log("imeRequest", "show");
-        }));
-        column.addView(button("Hide IME", v -> {
+        });
+        column.addView(showIme);
+        registerTarget("showIme", showIme);
+        Button hideIme = button("Hide IME", v -> {
             getWindow().getInsetsController().hide(WindowInsets.Type.ime());
             log("imeRequest", "hide");
-        }));
+        });
+        column.addView(hideIme);
+        registerTarget("hideIme", hideIme);
         mOrientation = button("", v -> cycleOrientation());
         updateOrientationLabel();
         column.addView(mOrientation);
@@ -159,5 +179,37 @@ public class ProbeTestActivity extends ProbeActivity {
 
     private void refreshInfo() {
         if (mInfo != null) mInfo.setText(ProbeLog.window(this).replace(' ', '\n'));
+    }
+
+    /**
+     * Logs {@code event=text editor=<n> len=<length> sentinels=<tokens>} when the set of gate sentinels in an editor
+     * changes. The editor contents themselves are never logged (an operator may type anything into it).
+     */
+    private final class SentinelWatcher implements TextWatcher {
+        private final int mEditor;
+        private Set<String> mLast = new LinkedHashSet<>();
+
+        SentinelWatcher(int editor) {
+            mEditor = editor;
+        }
+
+        @Override
+        public void beforeTextChanged(CharSequence s, int start, int count, int after) {
+        }
+
+        @Override
+        public void onTextChanged(CharSequence s, int start, int before, int count) {
+        }
+
+        @Override
+        public void afterTextChanged(Editable s) {
+            Set<String> found = new LinkedHashSet<>();
+            Matcher m = SENTINEL.matcher(s);
+            while (m.find()) found.add(m.group());
+            if (found.equals(mLast)) return;
+            mLast = found;
+            log("text", "editor=" + mEditor + " len=" + s.length()
+                    + " sentinels=" + (found.isEmpty() ? "none" : String.join(",", found)));
+        }
     }
 }
