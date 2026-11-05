@@ -1,0 +1,59 @@
+From 95c61d7e28f132213ca025cb4041535cd61d47a4 Mon Sep 17 00:00:00 2001
+From: Nicolas Villar <15879262+nvillar@users.noreply.github.com>
+Date: Wed, 4 Nov 2026 20:36:30 -0800
+Subject: [PATCH] DisplayManager: require WRITE_SECURE_SETTINGS to set display
+ offsets
+
+DUO-DE patch 0002 added IDisplayManager.setDisplayOffsets for the posture
+processor but enforced no permission at the Binder entry, so any app that
+reached the display service could shift the default display (moving all
+content off the lit panel and out of the touch frame) until the posture
+service applied its next posture. Enforce WRITE_SECURE_SETTINGS, as the
+forced display size controls in WindowManagerService and the HDR settings
+in this interface already do.
+
+The posture processor runs as the system uid, which holds every
+permission, so it is unaffected. Shell keeps access (it holds
+WRITE_SECURE_SETTINGS), as it has for `wm size`.
+
+Co-authored-by: Copilot App <223556219+Copilot@users.noreply.github.com>
+---
+ core/java/android/hardware/display/IDisplayManager.aidl      | 4 +++-
+ .../com/android/server/display/DisplayManagerService.java    | 5 ++++-
+ 2 files changed, 7 insertions(+), 2 deletions(-)
+
+diff --git a/core/java/android/hardware/display/IDisplayManager.aidl b/core/java/android/hardware/display/IDisplayManager.aidl
+index 0fa36878f3d6965be09998be4160c4663d16c2ff..616159bd73e311f53d255e0f72f2a71035dc3ca3 100644
+--- a/core/java/android/hardware/display/IDisplayManager.aidl
++++ b/core/java/android/hardware/display/IDisplayManager.aidl
+@@ -233,7 +233,9 @@ interface IDisplayManager {
+     // Query for DISPLAY_DECORATION support.
+     DisplayDecorationSupport getDisplayDecorationSupport(int displayId);
+ 
+-    // set display offsets for logical display
++    // Set display offsets for logical display.
++    // Requires WRITE_SECURE_SETTINGS permission.
++    @EnforcePermission("WRITE_SECURE_SETTINGS")
+     void setDisplayOffsets(int displayId, int x, int y);
+ 
+ 
+diff --git a/services/core/java/com/android/server/display/DisplayManagerService.java b/services/core/java/com/android/server/display/DisplayManagerService.java
+index f1d099fa64a68ce5c9bdae4497ab27e0900830d5..7e392d406f0c5dc9aa4c8504b8389c073f5656b5 100644
+--- a/services/core/java/com/android/server/display/DisplayManagerService.java
++++ b/services/core/java/com/android/server/display/DisplayManagerService.java
+@@ -5839,8 +5839,11 @@ public final class DisplayManagerService extends SystemService {
+             }
+         }
+ 
+-        @Override
++        @EnforcePermission(android.Manifest.permission.WRITE_SECURE_SETTINGS)
++        @Override // Binder call
+         public void setDisplayOffsets(int displayId, int x, int y) {
++            setDisplayOffsets_enforcePermission();
++
+             synchronized (mSyncRoot) {
+                 final LogicalDisplay display = mLogicalDisplayMapper.getDisplayLocked(displayId);
+                 if (display == null) {
+-- 
+2.34.1
+
