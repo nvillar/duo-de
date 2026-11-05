@@ -24,6 +24,9 @@ make() {
     mkdir -p "$OUT/system"
     printf 'ro.system.build.fingerprint=google/treble_arm64_bvN/tdgsi_arm64_ab:16/BP2A/%s:userdebug/test-keys\nro.system.build.tags=test-keys\nro.system.ota.json_url=%s\n' "$BUILD_NUMBER" "${FAKE_URL:-https://ota-disabled.invalid/duo-de-dev/ota.json}" > "$OUT/system/build.prop"
     head -c 1048576 /dev/urandom > "$OUT/system.img"
+    mkdir -p "$OUT/system/product/app/webview" "$OUT/system/product/app/Jelly" "$OUT/system/product/overlay"
+    echo resigned > "$OUT/system/product/app/webview/webview.apk"; echo jelly > "$OUT/system/product/app/Jelly/Jelly.apk"
+    echo rro > "$OUT/system/product/overlay/DuoVanillaWebViewOverlay.apk"
     # Like installclean + PRODUCT_PACKAGES: the probe apk exists only when duo-dev.mk names it.
     if grep -q '^PRODUCT_PACKAGES += DuoProbe' device/phh/treble/duo-dev.mk 2>/dev/null; then
       mkdir -p "$OUT/system/app/DuoProbe"; echo apk > "$OUT/system/app/DuoProbe/DuoProbe.apk"
@@ -31,10 +34,47 @@ make() {
   esac
 }
 EOF
+# LineageOS WebView layout (build/dev/pinned.xml): patches project + linkfiles, LFS prebuilt.
+W="$T/tree/external/chromium-webview"
+mkdir -p "$W/patches" "$W/prebuilt/arm64" "$T/tree/prebuilts/sdk/tools/linux/bin"
+echo 'android_app_import { name: "webview", arch: { arm64: { apk: "prebuilt/arm64/webview.apk" } } }' > "$W/patches/os_pickup.bp"
+echo 'android_default_version_name = "156.0.8078.47"' > "$W/patches/README"
+git -C "$W/patches" init -q; git -C "$W/patches" add -A; git -C "$W/patches" commit -qm webview
+ln -s patches/os_pickup.bp "$W/Android.bp"; ln -s patches/README "$W/README"
+head -c 4096 /dev/urandom > "$T/webview.apk"
+printf 'version https://git-lfs.github.com/spec/v1\noid sha256:%s\nsize 4096\n' "$(sha256sum "$T/webview.apk" | cut -d' ' -f1)" > "$T/webview.ptr"
+cp "$T/webview.ptr" "$W/prebuilt/arm64/webview.apk"
+git -C "$W/prebuilt/arm64" init -q; git -C "$W/prebuilt/arm64" add -A; git -C "$W/prebuilt/arm64" commit -qm prebuilt
+# As the LFS smudge filter would: real content in the work tree, clean status.
+cp "$T/webview.apk" "$W/prebuilt/arm64/webview.apk"; git -C "$W/prebuilt/arm64" update-index --assume-unchanged webview.apk
+cat > "$T/tree/prebuilts/sdk/tools/linux/bin/aapt2" <<'EOF'
+#!/bin/bash
+case "$1 $2" in
+  "dump badging") echo "package: name='com.android.webview' versionCode='807805050' versionName='${FAKE_WV_VERSION:-156.0.8078.47}' platformBuildVersionName=''" ;;
+  "dump xmltree") printf '%s\n' 'N: android=http://schemas.android.com/apk/res/android' 'E: webviewproviders (line=12)' '  E: webviewprovider (line=13)' '    A: packageName="com.android.webview" (Raw: "com.android.webview")' ;;
+esac
+EOF
+chmod +x "$T/tree/prebuilts/sdk/tools/linux/bin/aapt2"
 mkdir -p "$T/tree/vendor/hardware_overlay/TrebleApp"; echo apk > "$T/tree/vendor/hardware_overlay/TrebleApp/app.apk"
 mkdir -p "$T/tree/.repo/local_manifests"; cp "$H/build/dev/pinned.xml" "$T/tree/.repo/local_manifests/duo-de-pinned.xml"
 bash "$H/dev/build.sh" --skip-treble-app --label mock --jobs 2 "$T/tree"
 A=$(ls -d "$T/tree/duo-dev-artifacts/"*mock); ls -la "$A"; cat "$A/provenance.txt"; (cd "$A" && sha256sum -c SHA256SUMS)
+grep -q "^webview_chromium_version: 156.0.8078.47 " "$A/provenance.txt" \
+    && grep -q "^webview_source_apk_sha256: $(sha256sum "$T/webview.apk" | cut -d' ' -f1) " "$A/provenance.txt" \
+    && grep -q '^webview_default_provider_overlay: .*first provider com.android.webview$' "$A/provenance.txt" \
+    && grep -q '^jelly_apk_sha256: [0-9a-f]\{64\}$' "$A/provenance.txt" \
+    && echo "PASS provenance records WebView, its overlay and Jelly" || echo "FAIL WebView/Jelly provenance"
+echo "---- WebView source checks"
+webview_refused() { # label expected-message
+    if bash "$H/dev/build.sh" --skip-treble-app --label "$1" "$T/tree" >/dev/null 2>"$T/wv.err"; then echo "FAIL $1 accepted"
+    elif grep -q "$2" "$T/wv.err" && ! ls -d "$T/tree/duo-dev-artifacts/"*"$1" >/dev/null 2>&1; then echo "PASS $1 refused"
+    else echo "FAIL $1"; cat "$T/wv.err"; fi
+}
+cp "$T/webview.ptr" "$W/prebuilt/arm64/webview.apk"
+webview_refused lfspointer "lfs pull"
+cp "$T/webview.apk" "$W/prebuilt/arm64/webview.apk"
+mkdir "$W/.git"; webview_refused aospwebview "still AOSP's platform/external/chromium-webview"; rmdir "$W/.git"
+export FAKE_WV_VERSION=133.0.6943.137; webview_refused wvversion "versionName is '133.0.6943.137'"; unset FAKE_WV_VERSION
 echo "---- bad url in image must fail"
 if FAKE_URL=https://raw.githubusercontent.com/Archfx/duo-de/main-16/config/ota.json bash "$H/dev/build.sh" --skip-treble-app --label bad "$T/tree"; then echo FAIL; else echo "PASS rejects upstream url"; fi
 if bash "$H/dev/build.sh" --ota-url https://raw.githubusercontent.com/Archfx/x/ota.json "$T/tree"; then echo FAIL; else echo "PASS rejects archfx --ota-url"; fi

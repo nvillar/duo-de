@@ -385,6 +385,37 @@ if ! $SKIP_TREBLE_APP; then
 fi
 TREBLE_APP_SHA256="$(sha256sum vendor/hardware_overlay/TrebleApp/app.apk | cut -d' ' -f1)"
 
+# ---------------------------------------------------------------- WebView source
+
+# build/dev/pinned.xml replaces AOSP's platform/external/chromium-webview with
+# LineageOS's prebuilt (Git LFS) and links its Android.bp from the patches
+# project. A tree synced before that, or a failed LFS download (the file is then
+# the small pointer text), must not silently build the wrong WebView.
+WEBVIEW_DIR="external/chromium-webview"
+WEBVIEW_PREBUILT="$WEBVIEW_DIR/prebuilt/arm64"
+AAPT2="prebuilts/sdk/tools/linux/bin/aapt2"
+check_webview_source() {
+    local pointer oid
+    [ ! -e "$WEBVIEW_DIR/.git" ] \
+        || die "$WEBVIEW_DIR is still AOSP's platform/external/chromium-webview project; build/dev/pinned.xml replaces it with LineageOS's WebView. Re-run dev/sync.sh (if repo keeps the old directory, move $WEBVIEW_DIR out of the tree and sync again)"
+    grep -q 'prebuilt/arm64/webview.apk' "$WEBVIEW_DIR/Android.bp" 2>/dev/null \
+        || die "$WEBVIEW_DIR/Android.bp is not LineageOS's os_pickup.bp (missing repo linkfile); re-run dev/sync.sh"
+    [ -f "$WEBVIEW_PREBUILT/webview.apk" ] || die "$WEBVIEW_PREBUILT/webview.apk is missing; re-run dev/sync.sh"
+    pointer="$(git -C "$WEBVIEW_PREBUILT" cat-file blob HEAD:webview.apk)" \
+        || die "cannot read webview.apk from $WEBVIEW_PREBUILT HEAD"
+    oid="$(sed -n 's/^oid sha256:\([0-9a-f]\{64\}\)$/\1/p' <<<"$pointer")"
+    [ -n "$oid" ] || die "$WEBVIEW_PREBUILT/webview.apk is not a Git LFS file at HEAD (unexpected upstream change)"
+    WEBVIEW_SRC_SHA256="$(sha256sum "$WEBVIEW_PREBUILT/webview.apk" | cut -d' ' -f1)"
+    [ "$WEBVIEW_SRC_SHA256" == "$oid" ] \
+        || die "$WEBVIEW_PREBUILT/webview.apk does not match its Git LFS object $oid (an LFS pointer that was never downloaded?). Run: git -C $WEBVIEW_PREBUILT lfs pull"
+    WEBVIEW_SRC_COMMIT="$(proj_head "$WEBVIEW_PREBUILT")"
+    WEBVIEW_CHROMIUM="$(sed -n 's/^android_default_version_name = "\([0-9.]*\)"$/\1/p' "$WEBVIEW_DIR/README" 2>/dev/null | head -n1)"
+    [ -n "$WEBVIEW_CHROMIUM" ] || die "cannot read the Chromium version from $WEBVIEW_DIR/README"
+    [ -x "$AAPT2" ] || die "$AAPT2 not found (needed to check the built WebView and overlay)"
+    log "WebView source: LineageOS prebuilt $WEBVIEW_SRC_COMMIT, Chromium $WEBVIEW_CHROMIUM, apk sha256 $WEBVIEW_SRC_SHA256"
+}
+check_webview_source
+
 # State of every watched project (HEAD, tracked changes, and name/size/mtime of
 # untracked files that are not ignored), the generated product makefiles, the
 # TrebleApp prebuilt and the local manifests. Ignored files (build outputs) are
@@ -485,6 +516,32 @@ elif [ -e "$OUT/system/app/DuoProbe" ]; then
     die "$OUT/system/app/DuoProbe is left over from a --with-probe build; rebuild without --no-installclean"
 fi
 
+# Base image (vanilla): LineageOS WebView, its default-provider overlay, Jelly.
+PRODUCT_APPS="$OUT/system/product/app"
+WEBVIEW_APK="$PRODUCT_APPS/webview/webview.apk"
+JELLY_APK="$PRODUCT_APPS/Jelly/Jelly.apk"
+[ -f "$WEBVIEW_APK" ] || die "$WEBVIEW_APK was not produced"
+[ -f "$JELLY_APK" ] || die "$JELLY_APK was not produced (vanilla products add Jelly via device/phh/treble/duo-vanilla.mk)"
+WEBVIEW_OVERLAY_APK="$(find "$OUT/system/product/overlay" -name DuoVanillaWebViewOverlay.apk -print -quit 2>/dev/null || true)"
+[ -n "$WEBVIEW_OVERLAY_APK" ] || die "DuoVanillaWebViewOverlay.apk was not produced under $OUT/system/product/overlay"
+badging="$("$AAPT2" dump badging "$WEBVIEW_APK" 2>/dev/null | head -n1 || true)"
+WEBVIEW_BUILT_PKG="$(sed -n "s/^package: name='\([^']*\)'.*/\1/p" <<<"$badging")"
+WEBVIEW_BUILT_VERSION="$(sed -n "s/.* versionName='\([^']*\)'.*/\1/p" <<<"$badging")"
+[ "$WEBVIEW_BUILT_PKG" == com.android.webview ] \
+    || die "built WebView package is '$WEBVIEW_BUILT_PKG' (aapt2 dump badging), expected com.android.webview"
+[ "$WEBVIEW_BUILT_VERSION" == "$WEBVIEW_CHROMIUM" ] \
+    || die "built WebView versionName is '$WEBVIEW_BUILT_VERSION', expected Chromium $WEBVIEW_CHROMIUM from $WEBVIEW_DIR/README"
+# Informational: the first provider in the overlay is the default (WebViewUpdateServiceImpl2).
+WEBVIEW_OVERLAY_FIRST="$("$AAPT2" dump xmltree --file res/xml/config_webview_packages.xml "$WEBVIEW_OVERLAY_APK" 2>/dev/null \
+    | sed -n 's/.*A: packageName="\([^"]*\)".*/\1/p' | head -n1 || true)"
+if [ "$WEBVIEW_OVERLAY_FIRST" != com.android.webview ]; then
+    warn "could not confirm that $WEBVIEW_OVERLAY_APK lists com.android.webview first (got '${WEBVIEW_OVERLAY_FIRST:-nothing}'); check on the device with dumpsys webviewupdate"
+    WEBVIEW_OVERLAY_FIRST="unconfirmed (${WEBVIEW_OVERLAY_FIRST:-not read})"
+fi
+if [ -e "$PRODUCT_APPS/Browser2" ]; then
+    warn "$PRODUCT_APPS/Browser2 is still installed (Jelly overrides it; stale with --no-installclean?)"
+fi
+
 # The tree must not have changed while building (e.g. a concurrent sync).
 TREE_SNAPSHOT_AFTER="$(tree_snapshot)"
 if [ "$TREE_SNAPSHOT_AFTER" != "$TREE_SNAPSHOT_BEFORE" ]; then
@@ -580,6 +637,12 @@ treble_app_apk_sha256: $TREBLE_APP_SHA256
 projects_with_uncommitted_changes: $DIRTY_PROJECTS
 duo_probe: $PROBE_STATUS
 duo_probe_source_sha256: $PROBE_SHA256
+webview: LineageOS prebuilt ($WEBVIEW_PREBUILT @ $WEBVIEW_SRC_COMMIT), package $WEBVIEW_BUILT_PKG
+webview_chromium_version: $WEBVIEW_CHROMIUM (README; built apk versionName $WEBVIEW_BUILT_VERSION)
+webview_source_apk_sha256: $WEBVIEW_SRC_SHA256 (equals its Git LFS object id)
+webview_installed_apk_sha256: $(sha256sum "$WEBVIEW_APK" | cut -d' ' -f1) (re-signed with the build's certificate)
+webview_default_provider_overlay: ${WEBVIEW_OVERLAY_APK#"$OUT"/}; first provider $WEBVIEW_OVERLAY_FIRST
+jelly_apk_sha256: $(sha256sum "$JELLY_APK" | cut -d' ' -f1)
 tree_unchanged_during_build: verified
 
 aosp_manifest_branch: $(git config --file .repo/manifests.git/config --get branch.default.merge || echo unknown)

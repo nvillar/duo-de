@@ -172,6 +172,8 @@ android.googlesource.com rate-limits heavy clients with **HTTP 429**; a first sy
 
 The pinned manifest omits the GApps project. Add `--with-gapps` to include `vendor/gapps` (also pinned).
 
+**WebView and Jelly (LineageOS).** Both manifests remove AOSP's `platform/external/chromium-webview` (Chromium 133 for `bp2a`) and add, pinned, LineageOS's `android_external_chromium-webview_patches` (its `os_pickup.bp` and `README` are linked to `external/chromium-webview/Android.bp` and `README`), `android_external_chromium-webview_prebuilt_arm64` (`webview.apk`, Git LFS, about 250 MB, downloaded from `review.lineageos.org`) and `android_packages_apps_Jelly`. Only the arm64 prebuilt is synced: `android_app_import` takes the first device architecture, so arm64 products need nothing else; 32-bit products would also need `..._prebuilt_arm`. On an existing tree, `repo sync` deletes the old `external/chromium-webview` checkout as an obsolete project; if it refuses, move that directory out of the tree and sync again. Its objects stay in `.repo/project-objects/platform/external/chromium-webview.git` (36 GB on the r4 tree); delete that directory by hand to reclaim the space once nothing needs the old WebView.
+
 **History needed by the patches.** A `--depth=1` tree is fine for building, but `git am -3` needs the blobs each patch was made against, and fails with `sha1 information is lacking or useless ... could not build fake ancestor` when they are missing. The patched projects (about 37) therefore need:
 
 - **full history**, not a shallow clone. `dev/build.sh` checks this before applying patches and stops with a list of shallow projects;
@@ -207,8 +209,8 @@ For quick iterations, use `--no-installclean` with otherwise unchanged options. 
 1. Applies the `trebledroid`, `personal` and `duo` patch sets in that order through the repository's `patch.sh` (`git am -3`). It records the result in `~/aosp/.duo-dev/patch-state`; later runs skip patching while the patches and project heads are unchanged, and keep uncommitted edits in the tree. If the patches change, patched projects are moved back to their manifest revision and the patches re-applied. If a fetch-only `repo sync` moved a project's manifest revision, the patches are re-applied on the new revision. A patch that fails to apply stops the build.
 2. Writes `device/phh/treble/duo-dev.mk` from `build/aosp.mk`, with the updater feed `ro.system.ota.json_url` replaced, and generates the product makefiles from it.
 3. Rebuilds TrebleApp (`treble_app`, Gradle; needs network access on first run) and installs it as `vendor/hardware_overlay/TrebleApp/app.apk`, as `build.sh` does.
-4. Builds `systemimage` with `BUILD_NUMBER` set to a unique build id, for example `duodev.20261104081530.b43214d2`. The id appears in the build fingerprint.
-5. Verifies the AOSP test keys (`test-keys`), the updater feed and the fingerprint, and that the patched and pinned source projects (commits, tracked edits, untracked non-ignored files), the generated product makefiles, TrebleApp and the local manifests did not change during the build, then writes the artifacts.
+4. Checks the WebView source: `external/chromium-webview` is LineageOS's layout (not the AOSP project), and `prebuilt/arm64/webview.apk` has the SHA-256 of its Git LFS object (not an undownloaded pointer). Then builds `systemimage` with `BUILD_NUMBER` set to a unique build id, for example `duodev.20261104081530.b43214d2`. The id appears in the build fingerprint.
+5. Verifies the AOSP test keys (`test-keys`), the updater feed and the fingerprint; that the built WebView is `com.android.webview` with the Chromium version from the LineageOS `README`, and that Jelly and `DuoVanillaWebViewOverlay` were built; and that the patched and pinned source projects (commits, tracked edits, untracked non-ignored files), the generated product makefiles, TrebleApp and the local manifests did not change during the build, then writes the artifacts.
 
 Results go to `~/aosp/duo-dev-artifacts/<build-id>/`:
 
@@ -216,7 +218,7 @@ Results go to `~/aosp/duo-dev-artifacts/<build-id>/`:
 |---|---|
 | `system-treble_arm64_bvN-<build-id>.img` | the system image |
 | `…img.sha256` | its SHA-256 |
-| `provenance.txt` | build id, fingerprint, harness commit, patch-set hash, pinned-manifest check, projects with uncommitted changes, container image id, toolchain versions |
+| `provenance.txt` | build id, fingerprint, harness commit, patch-set hash, pinned-manifest check, projects with uncommitted changes, WebView (prebuilt commit, Chromium version, source and installed APK SHA-256, provider overlay), Jelly APK SHA-256, container image id, toolchain versions |
 | `manifest.xml` | `repo manifest -r` of the tree that was built (patched projects show their post-patch HEADs) |
 | `pinned-bases.txt` | per pinned project: pinned revision, the revision compared with it (for patched projects the base the patches were applied on, otherwise the checked-out HEAD), repo's current `m/` ref (diagnostic only) and the built HEAD |
 | `patch-state.txt`, `system-build.prop` | applied patch state and the image's build properties |
@@ -254,6 +256,16 @@ git ls-remote https://github.com/Archfx/duoPosture refs/heads/main
 ```
 
 Keep the resolution date in the file's header current, re-run `dev/podman.sh sync`, then build.
+
+The three LineageOS projects (WebView patches, WebView arm64 prebuilt, Jelly) are pinned in `build/default.xml` too, so release builds use the same commits. Before each image build, check for a newer WebView and move the patches and prebuilt pins **together** (the prebuilt's `<uses-library>` entries must match `os_pickup.bp`), in both files:
+
+```bash
+git ls-remote https://github.com/LineageOS/android_external_chromium-webview_patches refs/heads/main
+git ls-remote https://github.com/LineageOS/android_external_chromium-webview_prebuilt_arm64 refs/heads/main
+git ls-remote https://github.com/LineageOS/android_packages_apps_Jelly refs/heads/lineage-23.2
+```
+
+Update the Chromium version and LFS object id in the comment in `build/dev/pinned.xml` (`git -C external/chromium-webview/prebuilt/arm64 cat-file blob HEAD:webview.apk` prints the pointer). Move Jelly only when its new commit still builds against the r4 prebuilts (androidx, Kotlin) in the tree.
 
 ### 5.5 Checking that the patch series applies
 
@@ -301,6 +313,8 @@ Verify the checksum on Windows before flashing:
 | The distribution stopped in the middle of a sync or build | The `wsl.exe` client that started it exited, and WSL idled out the distribution. Run long commands from an attached terminal with `tmux`/`screen` (see "Long-running commands under WSL" above), then rerun the same command without `--reset-patches` to continue incrementally. |
 | After a WSL stop or Windows sleep mid-build: `no element found` for an empty `AndroidManifest.xml`, `failed to open APK: Invalid file`, then Kotlin `unresolved reference` or `cannot access kotlin.String` | Truncated or corrupt intermediate files that Ninja considers up to date. Deleting individual suspect outputs was not enough (it failed even after all 11,786 archives validated OK); remove `~/aosp/out` and rebuild clean. Keep the host awake to avoid this (see "Long-running commands under WSL"). |
 | *a dev/build.sh or dev/sync.sh is running on the tree* | Another developer script holds `<tree>/.duo-dev/lock`. Wait for it to finish. |
+| *webview.apk does not match its Git LFS object* | The LFS download failed and the file is the pointer text. Run `git -C ~/aosp/external/chromium-webview/prebuilt/arm64 lfs pull` (needs `review.lineageos.org`). |
+| *external/chromium-webview is still AOSP's ... project* | The tree was synced before the LineageOS WebView change. Re-run `dev/sync.sh` (see 5.1). |
 
 ## 6. Flashing a system image
 
@@ -364,6 +378,19 @@ adb pull /data/local/tmp/s.png
 Useful state dumps: `dumpsys activity containers`, `dumpsys window`, `dumpsys input`, `dumpsys display`, `dumpsys device_state`.
 
 Check which build is running: `adb shell getprop ro.system.build.fingerprint` (developer builds contain `duodev.`) and `adb shell getprop ro.system.ota.json_url`.
+
+### WebView and browser (vanilla)
+
+On a vanilla build, `com.android.webview` (LineageOS Chromium) is the default WebView provider and Jelly is the browser:
+
+```powershell
+adb shell dumpsys webviewupdate                     # Current WebView package: (com.android.webview, <Chromium version>)
+adb shell cmd overlay list android | Select-String webview   # [x] dev.duode.overlay.vanilla.webview
+adb shell pm list packages org.lineageos.jelly
+adb shell am start -a android.intent.action.VIEW -d https://example.com   # opens Jelly
+```
+
+A device that was set up before this change keeps a WebView provider chosen in Developer options while it stays valid; without one, the overlay's default applies from the next boot.
 
 ### Experimental two-panel mode
 
