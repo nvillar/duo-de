@@ -15,6 +15,7 @@
 *.te            text eol=lf
 *.rc            text eol=lf
 *.prop          text eol=lf
+*.getevent      text eol=lf
 Containerfile   text eol=lf
 Dockerfile      text eol=lf
 .gitattributes  text eol=lf
