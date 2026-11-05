@@ -381,6 +381,11 @@ class Invariants(unittest.TestCase):
     def test_panel_off(self):
         off = Snap(containers=sim.fixture("off-containers.txt"))
         self.assertEqual(C.eval_panel_off(off, {"sys.duode.panels.active": "0",
+                                                "persist.debug.phh.duo.panels": "off"}).status, PASS)
+        for still_on in ("true", "yes", "1", "maybe"):
+            self.assertEqual(C.eval_panel_off(off, {"sys.duode.panels.active": "0",
+                                                    "persist.debug.phh.duo.panels": still_on}).status, INCOMPLETE)
+        self.assertEqual(C.eval_panel_off(off, {"sys.duode.panels.active": "0",
                                                 "persist.debug.phh.duo.panels": "0"}).status, PASS)
         self.assertEqual(C.eval_panel_off(off, {"sys.duode.panels.active": "1"}).status, FAIL)
         on = Snap(containers=sim.fixture("panel-containers.txt"))

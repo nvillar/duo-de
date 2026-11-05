@@ -423,6 +423,29 @@ def parse_input(text: str, display_id: int = 0) -> InputState:
 # ---------------------------------------------------------------------------------------------------------------------
 # small command outputs
 
+_TRUE = ("1", "y", "yes", "on", "true")
+_FALSE = ("0", "n", "no", "off", "false")
+
+
+def android_bool(value: str | None, default: bool = False) -> bool | None:
+    """A system property as SystemProperties.getBoolean reads it (android::base::ParseBool): 1/y/yes/on/true and
+    0/n/no/off/false; unset or empty gives the default. Anything else is unknown (None) here, never guessed."""
+    if value is None or value == "":
+        return default
+    if value in _TRUE:
+        return True
+    if value in _FALSE:
+        return False
+    return None
+
+
+def same_bool_prop(a: str | None, b: str | None) -> bool:
+    """Equal as the framework reads them (true == 1, unset == 0); unparsable values must match exactly."""
+    pa, pb = android_bool(a), android_bool(b)
+    if pa is None or pb is None:
+        return a == b
+    return pa == pb
+
 def parse_device_state(text: str) -> tuple[int, str]:
     m = re.search(r"mCommittedState=Optional\[DeviceState\{identifier=(\d+), name='([^']*)'", text)
     if not m:

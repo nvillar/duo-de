@@ -12,6 +12,7 @@ import re
 from duogate.adb import Adb
 from duogate.checks import DUO1
 from duogate.model import Rect
+from duogate.parsers import android_bool
 
 FIX = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures")
 PANEL = {"A": DUO1.panel("A"), "B": DUO1.panel("B")}
@@ -313,7 +314,9 @@ class Sim:
     def reboot(self):
         self.reboots += 1
         self.tasks = []
-        on = "1" in (self.props.get("persist.sys.phh.duo.panels"), self.props.get("persist.debug.phh.duo.panels"))
+        # the framework: SystemProperties.getBoolean(sys) || getBoolean(debug), unparsable -> false
+        on = any(android_bool(self.props.get(k)) is True
+                 for k in ("persist.sys.phh.duo.panels", "persist.debug.phh.duo.panels"))
         self.props["sys.duode.panels.active"] = "1" if on else "0"
         self.props["sys.boot_completed"] = "1"
 

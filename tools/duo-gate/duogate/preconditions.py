@@ -128,10 +128,6 @@ def apply_test_settings(dev, pre: dict) -> list[str]:
     return applied
 
 
-def _off(value) -> bool:
-    return value in (None, "", "0", "false")
-
-
 def restore(dev, data: dict, reboot: bool = False) -> Verdict:
     """Puts back the recorded settings, HOME and panel properties, then reads them back. The panel properties are only
     read at boot: if they (or the boot's sys.duode.panels.active) differ from the recorded state, the device is
@@ -158,24 +154,23 @@ def restore(dev, data: dict, reboot: bool = False) -> Verdict:
     reboot_needed = False
     for k, want in data.get("panels", {}).items():
         got = _try(lambda: adb.getprop(k))
-        if got == want or (_off(got) and _off(want)):
+        if parsers.same_bool_prop(got, want):
             continue
         adb.shell("setprop %s %s" % (k, want if want else "0"), check=False)
         got = _try(lambda: adb.getprop(k))
-        if got == want or (_off(got) and _off(want)):
+        if parsers.same_bool_prop(got, want):
             reboot_needed = True
             v.note("%s restored to %r" % (k, want))
         else:
             v.fail("%s=%r, could not restore the recorded %r (persist.sys.* needs adb root)" % (k, got, want))
     active, source = expected_active(data)
     if active is None:
-        v.incomplete("recorded panel mode unknown (no 'active' and no panel properties in the record): the effective "
-                     "mode cannot be verified")
+        v.incomplete("recorded panel mode unknown (%s): the effective mode cannot be verified" % source)
     else:
         if source != "recorded":
             v.note("expected panel mode %r %s" % (active, source))
         now = _try(lambda: adb.getprop("sys.duode.panels.active"))
-        if not (now == active or (_off(now) and _off(active))):
+        if not parsers.same_bool_prop(now, active):
             reboot_needed = True
     if reboot_needed:
         if not reboot:
@@ -189,7 +184,7 @@ def restore(dev, data: dict, reboot: bool = False) -> Verdict:
                 now = adb.getprop("sys.duode.panels.active")
                 if active is None:
                     v.incomplete("rebooted, but the expected panel mode is unknown")
-                elif not (now == active or (_off(now) and _off(active))):
+                elif not parsers.same_bool_prop(now, active):
                     v.fail("after reboot sys.duode.panels.active=%r, expected %r" % (now, active))
                 else:
                     v.note("rebooted to apply the restored panel properties")
@@ -206,7 +201,13 @@ def expected_active(data: dict) -> tuple[str | None, str]:
         return data["active"], data.get("active_source", "recorded")
     panels = data.get("panels") or {}
     if panels and all(isinstance(x, str) for x in panels.values()):
-        return ("1" if any(x == "1" for x in panels.values()) else "0"), "derived from the recorded panel properties"
+        # the framework enables panel mode when either flag reads true with SystemProperties.getBoolean
+        flags = [parsers.android_bool(x) for x in panels.values()]
+        if any(f is True for f in flags):
+            return "1", "derived from the recorded panel properties %s" % panels
+        if all(f is False for f in flags):
+            return "0", "derived from the recorded panel properties %s" % panels
+        return None, "unparsable recorded panel properties %s" % panels
     return None, "unknown"
 
 

@@ -79,7 +79,8 @@ Exit code: 0 PASS, 1 FAIL, 2 INCOMPLETE, 3 usage error.
    PO, which restores and reboots itself; if they (or the boot's `sys.duode.panels.active`) still differ from the
    recorded state, they are restored and the result stays INCOMPLETE "reboot required" unless `--allow-reboot` (or
    `restore --reboot`) authorizes the reboot, after which panel mode is verified. The expected mode is the recorded
-   `active` value (records from before it existed: `preconditions.json`, else derived from the recorded properties),
+   `active` value (records from before it existed: `preconditions.json`, else derived from the recorded properties with `SystemProperties.getBoolean` semantics:
+   `1/y/yes/on/true` on, `0/n/no/off/false` or unset off, anything else unknown),
    so a pending reboot is never forgotten between two `restore` runs; an unknown mode is never reported complete.
 5. **Report**: `report.md`, `results.json`, console summary.
 

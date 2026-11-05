@@ -9,7 +9,7 @@ from .adb import AdbError
 from .checks import DUO1, SIDES, Geometry, other
 from .device import HOME_BUTTONS, KEY_ENTER, KEY_HOME, KEY_POWER, KEY_WAKEUP, Device
 from .model import INCOMPLETE, PASS, Check, EvidenceError, Verdict
-from .parsers import parse_dropbox
+from .parsers import android_bool, parse_dropbox
 from .preconditions import PROBE_HOME
 
 
@@ -914,7 +914,8 @@ def gate_panel_off(ctx: Ctx) -> None:
         return
     recorded = {k: ctx.pre["panels"].get(k, "") for k in ("persist.sys.phh.duo.panels",
                                                            "persist.debug.phh.duo.panels")}
-    changed = [k for k, val in recorded.items() if val not in ("", "0")]
+    # SystemProperties.getBoolean semantics (true/yes/on/y/1); an unparsable value is cleared and restored too
+    changed = [k for k, val in recorded.items() if android_bool(val) is not False]
 
     def reboot():
         adb.run(["reboot"], check=False)
@@ -933,7 +934,7 @@ def gate_panel_off(ctx: Ctx) -> None:
         for k in changed:
             adb.shell("setprop %s 0" % k, check=False)
         props = {k: adb.getprop(k) for k in recorded}
-        if any(v_ not in ("", "0") for v_ in props.values()):
+        if any(android_bool(v_) is not False for v_ in props.values()):
             for c in [off] + list(launch.values()):
                 c.skip("cannot clear %s (persist.sys.* needs adb root)" % props)
         else:
@@ -961,7 +962,7 @@ def gate_panel_off(ctx: Ctx) -> None:
         for k, val in recorded.items():
             if adb.getprop(k) != val:
                 v.fail("%s=%r, recorded %r" % (k, adb.getprop(k), val))
-        if recorded.get("persist.debug.phh.duo.panels") == "1" or recorded.get("persist.sys.phh.duo.panels") == "1":
+        if any(android_bool(val) is True for val in recorded.values()):
             snap = dev.snap("PO.restored", kinds=("containers",))
             v.merge(C.check_geometry(snap, dev.geo))
             return v, snap.files, None

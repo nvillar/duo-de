@@ -8,7 +8,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .model import EvidenceError, Rect, Verdict
-from .parsers import (DropboxEntry, LogLine, ProbeEvent, policy_minimized_panel, policy_restored_task)
+from .parsers import (DropboxEntry, LogLine, ProbeEvent, android_bool, policy_minimized_panel,
+                      policy_restored_task)
 
 POLICY_HIDDEN = 8          # FLAG_FORCE_HIDDEN_FOR_DUO_PANEL (frameworks_base 0014)
 SIDES = ("A", "B")         # A = left panel 0, B = right panel 1 (unrotated, unfolded)
@@ -562,7 +563,7 @@ def eval_panel_off(snap, props: dict) -> Verdict:
     if props.get("sys.duode.panels.active") != "0":
         v.fail("sys.duode.panels.active=%r with both panel properties off" % props.get("sys.duode.panels.active"))
     for k in ("persist.sys.phh.duo.panels", "persist.debug.phh.duo.panels"):
-        if props.get(k, "") not in ("", "0", "false"):
+        if android_bool(props.get(k)) is not False:      # SystemProperties.getBoolean semantics; unparsable = unknown
             v.incomplete("%s=%s, expected off" % (k, props.get(k)))
     c = _snap(lambda: snap.containers, v, "containers")
     if c is not None and c.panel_names():

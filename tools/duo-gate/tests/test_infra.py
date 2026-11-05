@@ -153,6 +153,47 @@ class Restore(unittest.TestCase):
         self.assertEqual(preconditions.expected_active(data)[0], "1")
         self.assertIn("preconditions.json", preconditions.expected_active(data)[1])
 
+    def test_true_spelled_flags_are_panel_on(self):
+        # Astra's repro: recorded and current "true", no recorded 'active', effective mode "0"
+        sim = self.fake.sim
+        sim.props["persist.debug.phh.duo.panels"] = "true"
+        sim.props["sys.duode.panels.active"] = "0"
+        record = {"home": "a.b/.C", "settings": {}, "panels": {"persist.sys.phh.duo.panels": "",
+                                                              "persist.debug.phh.duo.panels": "true"}}
+        self.assertEqual(preconditions.expected_active(record)[0], "1")
+        self.assertEqual(preconditions.restore(self.dev, dict(record)).status, INCOMPLETE)
+        preconditions.REBOOT_SETTLE, old = 0, preconditions.REBOOT_SETTLE
+        try:
+            v = preconditions.restore(self.dev, dict(record), reboot=True)
+        finally:
+            preconditions.REBOOT_SETTLE = old
+        self.assertEqual(v.status, PASS, v.reasons)
+        self.assertEqual((sim.reboots, sim.props["sys.duode.panels.active"]), (1, "1"))
+
+    def test_boolean_spellings(self):
+        for on in ("1", "y", "yes", "on", "true"):
+            self.assertEqual(preconditions.expected_active({"panels": {"persist.debug.phh.duo.panels": on}})[0], "1")
+        for off in ("", "0", "n", "no", "off", "false"):
+            self.assertEqual(preconditions.expected_active({"panels": {"persist.debug.phh.duo.panels": off,
+                                                                       "persist.sys.phh.duo.panels": ""}})[0], "0")
+        for bad in ("maybe", "TRUE", "2"):
+            self.assertIsNone(preconditions.expected_active({"panels": {"persist.debug.phh.duo.panels": bad}})[0], bad)
+
+    def test_unparsable_flag_is_never_complete(self):
+        self.fake.sim.props["persist.debug.phh.duo.panels"] = "maybe"
+        v = preconditions.restore(self.dev, {"home": "a.b/.C", "settings": {},
+                                             "panels": {"persist.debug.phh.duo.panels": "maybe"}}, reboot=True)
+        self.assertEqual(v.status, INCOMPLETE)
+        self.assertEqual(self.fake.sim.reboots, 0)
+
+    def test_equivalent_spellings_need_no_change(self):
+        sim = self.fake.sim
+        sim.props["persist.debug.phh.duo.panels"] = "true"
+        v = preconditions.restore(self.dev, {"home": "a.b/.C", "settings": {}, "active": "1",
+                                             "panels": {"persist.debug.phh.duo.panels": "1"}})
+        self.assertEqual(v.status, PASS, v.reasons)
+        self.assertFalse(any(c.startswith("setprop") for c in sim.commands))
+
     def test_unknown_mode_is_never_complete(self):
         v = preconditions.restore(self.dev, {"home": "a.b/.C", "settings": {}})
         self.assertEqual(v.status, INCOMPLETE)
