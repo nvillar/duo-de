@@ -1,0 +1,1821 @@
+From cae01b9873adee12c85147c33d71e231f34508f5 Mon Sep 17 00:00:00 2001
+From: Nicolas Villar <15879262+nvillar@users.noreply.github.com>
+Date: Wed, 4 Nov 2026 22:58:42 -0800
+Subject: [PATCH] Duo: three-finger gesture recognizer, logging only
+
+Prototype of the Surface Duo three-finger app gestures (docs/dual-screen-plan.md, three-finger gesture
+decision): it recognises them and logs what it recognised, and takes no action. Actions (span, contract,
+move/swap) come later, on top of the topology controller and the move/span commands.
+
+| Gesture | Logged as |
+|---|---|
+| pinch-out, three fingers on one panel | gesture=SPAN target=<that panel> |
+| pinch-in, three fingers on one panel | gesture=CONTRACT target=<that panel> |
+| pinch with fingers on both panels | out = SPAN, in = CONTRACT; target = panel with two of the three |
+| sideways swipe on one panel toward the other | gesture=PUSH target=<from> to=<other> |
+
+DuoThreeFingerClassifier (pure Java on DuoPanelGeometry, no Android dependencies) classifies fingers by
+the panel they land on and decides once, when the spread change reaches 40 dp or the translation 80 dp:
+the winner must beat the other measure 2:1 (across the panels the pinch must be at least half the
+translation across the hinge, and swipes with fingers on both panels are cancelled), every finger must
+agree with it, and a push must be across the hinge (not along it) and toward the other panel. Otherwise
+the gesture is cancelled with a reason. Fingers may start moving while the others land (300 ms), and are
+measured from where they landed. Touches starting in an edge-swipe zone (outer edges and hinge-side
+edges 24 dp, top 32 dp, bottom 48 dp) are ineligible; contacts on the hinge band or the display boundary
+(controller artefacts, fingers parked after sliding off an edge) are ignored, and a finger reaching the
+boundary counts as lifted. A recognised gesture is followed to the first lift and reported as COMMIT, or as
+CANCEL reversed if it went back below half its threshold. Works for every rotation (the axis is the one
+across the hinge) and needs both panels on the display (spanned or gapless).
+
+DuoThreeFingerGestureMonitor (CoreStartable, DuoGestureModule in ReferenceSystemUIModule) feeds it
+from a gesture input monitor on the default display. It never pilfers pointers, so input delivery is
+unchanged. Off by default; runs only on a Duo with sys.duode.panels.active=1 and
+`settings put global duode_three_finger_gestures 1`; `duode_three_finger_gestures_config` overrides
+thresholds (for example "pinchDp=30,swipeDp=60"); both apply without a restart. Touches starting on the
+keyguard and touches with a stylus are reported as cancelled. One log line per result, tag DuoGesture:
+
+  event=RECOGNIZED gesture=SPAN motion=pinch-out split=3+0 target=0 to=-1 pinchPx=+108 scale=1.60
+  acrossPx=+9 alongPx=-20 ms=1040 rot=0 reason=pinch
+
+dumpsys activity service com.android.systemui/.SystemUIService
+com.android.systemui.duo.gesture.DuoThreeFingerGestureMonitor shows the state and the last 20 results.
+
+Host tests: DuoThreeFingerClassifierTests (java_test_host, 35 cases on synthetic touch streams: every
+gesture, rotations 1-3, gapless, edge zones, fourth finger, bounce, reversal, keyguard, single panel).
+The DUO-DE harness also replays raw getevent captures from a Duo 1 through the classifier
+(tools/duo-gesture). Not built in an Android tree or run on a device yet; the SystemUI classes were
+type-checked against the r4 SystemUI-core and framework header jars, without Dagger processing.
+
+Co-authored-by: Copilot App <223556219+Copilot@users.noreply.github.com>
+---
+ packages/SystemUI/Android.bp                  |   7 +
+ .../dagger/ReferenceSystemUIModule.java       |   2 +
+ .../duo/gesture/DuoGestureModule.java         |  33 +
+ .../duo/gesture/DuoThreeFingerClassifier.java | 814 ++++++++++++++++++
+ .../gesture/DuoThreeFingerGestureMonitor.java | 221 +++++
+ .../SystemUI/tests/DuoGestureTests/Android.bp |  15 +
+ .../gesture/DuoThreeFingerClassifierTest.java | 395 +++++++++
+ .../systemui/duo/gesture/TouchScript.java     | 200 +++++
+ 8 files changed, 1687 insertions(+)
+ create mode 100755 packages/SystemUI/src/com/android/systemui/duo/gesture/DuoGestureModule.java
+ create mode 100755 packages/SystemUI/src/com/android/systemui/duo/gesture/DuoThreeFingerClassifier.java
+ create mode 100755 packages/SystemUI/src/com/android/systemui/duo/gesture/DuoThreeFingerGestureMonitor.java
+ create mode 100755 packages/SystemUI/tests/DuoGestureTests/Android.bp
+ create mode 100755 packages/SystemUI/tests/DuoGestureTests/src/com/android/systemui/duo/gesture/DuoThreeFingerClassifierTest.java
+ create mode 100755 packages/SystemUI/tests/DuoGestureTests/src/com/android/systemui/duo/gesture/TouchScript.java
+
+diff --git a/packages/SystemUI/Android.bp b/packages/SystemUI/Android.bp
+index 718b9ed11..c224818a0 100644
+--- a/packages/SystemUI/Android.bp
++++ b/packages/SystemUI/Android.bp
+@@ -505,6 +505,13 @@ filegroup {
+     visibility: ["//visibility:private"],
+ }
+ 
++// Pure-Java three-finger gesture classifier of the Surface Duo; also compiled on the host for its unit tests.
++filegroup {
++    name: "SystemUI-duo-three-finger-classifier-src",
++    srcs: ["src/com/android/systemui/duo/gesture/DuoThreeFingerClassifier.java"],
++    visibility: ["//frameworks/base/packages/SystemUI/tests/DuoGestureTests"],
++}
++
+ android_library {
+     name: "SystemUI-core",
+     srcs: [
+diff --git a/packages/SystemUI/src/com/android/systemui/dagger/ReferenceSystemUIModule.java b/packages/SystemUI/src/com/android/systemui/dagger/ReferenceSystemUIModule.java
+index a93fc28f9..ea71dc891 100644
+--- a/packages/SystemUI/src/com/android/systemui/dagger/ReferenceSystemUIModule.java
++++ b/packages/SystemUI/src/com/android/systemui/dagger/ReferenceSystemUIModule.java
+@@ -41,6 +41,7 @@ import com.android.systemui.dock.DockManager;
+ import com.android.systemui.dock.DockManagerImpl;
+ import com.android.systemui.doze.DozeHost;
+ import com.android.systemui.dreams.suppression.dagger.NoOpActivityRecognitionModule;
++import com.android.systemui.duo.gesture.DuoGestureModule;
+ import com.android.systemui.education.dagger.ContextualEducationModule;
+ import com.android.systemui.emergency.EmergencyGestureModule;
+ import com.android.systemui.inputdevice.tutorial.KeyboardTouchpadTutorialModule;
+@@ -147,6 +148,7 @@ import javax.inject.Provider;
+         DefaultBlueprintModule.class,
+         DeviceStateAutoRotateModule.class,
+         DisplayPhoneModule.class,
++        DuoGestureModule.class,
+         EmergencyGestureModule.class,
+         GestureModule.class,
+         HeadsUpModule.class,
+diff --git a/packages/SystemUI/src/com/android/systemui/duo/gesture/DuoGestureModule.java b/packages/SystemUI/src/com/android/systemui/duo/gesture/DuoGestureModule.java
+new file mode 100755
+index 000000000..2cc19f770
+--- /dev/null
++++ b/packages/SystemUI/src/com/android/systemui/duo/gesture/DuoGestureModule.java
+@@ -0,0 +1,33 @@
++/*
++ * Copyright (C) 2026 The Duo-DE Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package com.android.systemui.duo.gesture;
++
++import com.android.systemui.CoreStartable;
++
++import dagger.Binds;
++import dagger.Module;
++import dagger.multibindings.ClassKey;
++import dagger.multibindings.IntoMap;
++
++/** Starts the Surface Duo three-finger gesture monitor (logging-only prototype). */
++@Module
++public abstract class DuoGestureModule {
++    @Binds
++    @IntoMap
++    @ClassKey(DuoThreeFingerGestureMonitor.class)
++    abstract CoreStartable bindDuoThreeFingerGestureMonitor(DuoThreeFingerGestureMonitor monitor);
++}
+diff --git a/packages/SystemUI/src/com/android/systemui/duo/gesture/DuoThreeFingerClassifier.java b/packages/SystemUI/src/com/android/systemui/duo/gesture/DuoThreeFingerClassifier.java
+new file mode 100755
+index 000000000..6678c7c2a
+--- /dev/null
++++ b/packages/SystemUI/src/com/android/systemui/duo/gesture/DuoThreeFingerClassifier.java
+@@ -0,0 +1,814 @@
++/*
++ * Copyright (C) 2026 The Duo-DE Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package com.android.systemui.duo.gesture;
++
++import com.android.internal.policy.DuoPanelGeometry;
++
++import java.util.Locale;
++
++/**
++ * Recognises the Surface Duo three-finger app gestures in a touch stream. It only reports what it recognised; acting
++ * on it (span, contract, push) is left to the caller.
++ *
++ * <ul>
++ * <li>Pinch-out with the three fingers on one panel: {@link Gesture#SPAN} the app on that panel.</li>
++ * <li>Pinch-in with the three fingers on one panel: {@link Gesture#CONTRACT} onto that panel.</li>
++ * <li>Pinch with fingers starting on both panels: out = SPAN, in = CONTRACT; the target is the panel that holds two
++ * of the three fingers.</li>
++ * <li>Sideways swipe with the three fingers on one panel, toward the other panel: {@link Gesture#PUSH} the app
++ * over. "Sideways" means across the hinge, whatever the rotation.</li>
++ * </ul>
++ *
++ * Fingers are classified by the panel they first land on, and measured from where they landed; they may start
++ * moving while the others land (within {@link Config#landingMs} of the first), otherwise movement before the third
++ * finger makes the touch ineligible. The decision is taken once, when either the spread change
++ * reaches {@link Config#pinchDp} or the translation reaches {@link Config#swipeDp}: the winner must beat the other
++ * measure by a dead zone and every finger must agree with it, otherwise the gesture is cancelled. Contacts that land
++ * in the edge-swipe zones (outer edges, hinge-side edges, status bar, navigation area) make the touch ineligible.
++ * Contacts landing in the hinge band or on the display boundary (controller artefacts, fingers parked after sliding
++ * off an edge) are ignored. A finger that slides onto the display boundary counts as lifted.
++ *
++ * After recognition the gesture is followed until the first of the three fingers lifts: it commits if it is still at
++ * least {@link Config#commitFraction} of the threshold in the recognised direction, otherwise it is cancelled
++ * (reversed). One {@link Result} is reported at recognition and one at the end; touches that never had three
++ * counted fingers on the screen report nothing.
++ *
++ * Pure Java on top of {@link DuoPanelGeometry}, single threaded, no allocation per move event. The action constants
++ * have the values of {@code MotionEvent.ACTION_*}; coordinates are display pixels at the current rotation.
++ */
++public final class DuoThreeFingerClassifier {
++    public static final int ACTION_DOWN = 0;
++    public static final int ACTION_UP = 1;
++    public static final int ACTION_MOVE = 2;
++    public static final int ACTION_CANCEL = 3;
++    public static final int ACTION_POINTER_DOWN = 5;
++    public static final int ACTION_POINTER_UP = 6;
++
++    /** What a result reports. */
++    public enum Event { RECOGNIZED, COMMIT, CANCEL }
++
++    /** The command a gesture stands for. */
++    public enum Gesture { NONE, SPAN, CONTRACT, PUSH }
++
++    /** The finger motion. */
++    public enum Motion {
++        NONE("none"), PINCH_OUT("pinch-out"), PINCH_IN("pinch-in"), SWIPE("swipe");
++
++        public final String label;
++
++        Motion(String label) {
++            this.label = label;
++        }
++    }
++
++    /** Receives the results, on the thread that feeds the events. */
++    public interface Callback {
++        void onResult(Result result);
++    }
++
++    /** Describes the display when a touch starts (at ACTION_DOWN). */
++    public interface Environment {
++        DisplayState atTouchStart();
++    }
++
++    /** Thresholds, in dp unless noted. The classifier keeps a copy. */
++    public static final class Config {
++        /** Pixels per dp. */
++        public float density = 2.5f;
++        /** Edge-swipe zone along the outer (left/right) display edges, where Back starts. */
++        public float edgeDp = 24;
++        /** Edge zone along the panel edges next to the hinge. */
++        public float hingeDp = 24;
++        /** Edge zone along the display top (status bar, shade). */
++        public float topDp = 32;
++        /** Edge zone along the display bottom (navigation handle, taskbar). */
++        public float bottomDp = 48;
++        /** Contacts this close to the display boundary are artefacts or parked fingers. */
++        public float boundaryDp = 3;
++        /**
++         * Movement before the third finger lands that makes the touch something else (a scroll, a zoom), unless the
++         * third finger lands within {@link #landingMs} of the first.
++         */
++        public float slopDp = 12;
++        /** Milliseconds, from the first finger, within which the fingers may already move while landing. */
++        public float landingMs = 300;
++        /** Spread change that decides a pinch. */
++        public float pinchDp = 40;
++        /** Translation that decides a swipe. */
++        public float swipeDp = 80;
++        /** Dead zone on one panel: the winning score (distance / threshold) must be this many times the other. */
++        public float dominance = 2;
++        /** Across the panels: |pinch| must be at least this fraction of the translation across the hinge. */
++        public float crossDominance = 0.5f;
++        /** A push needs |across| >= sideways * |along|. */
++        public float sideways = 1;
++        /** A pinch finger may move against the pinch by at most this fraction of the pinch. */
++        public float pinchAgainst = 0.5f;
++        /** Each finger of a push must cover at least this fraction of the push. */
++        public float swipeFollow = 0.3f;
++        /** At the end, this fraction of the threshold must remain in the recognised direction to commit. */
++        public float commitFraction = 0.5f;
++
++        public Config() {
++        }
++
++        /** Defaults for a display density (DisplayMetrics.density). */
++        public static Config forDensity(float density) {
++            Config c = new Config();
++            c.density = density;
++            return c;
++        }
++
++        public Config copy() {
++            Config c = new Config();
++            for (String key : KEYS) c.set(key, get(key));
++            return c;
++        }
++
++        /**
++         * Applies "key=value,key=value" overrides (keys are the field names) to a copy of {@code base}. Whitespace
++         * and empty entries are ignored. Throws IllegalArgumentException for an unknown key or a bad value.
++         */
++        public static Config parse(String spec, Config base) {
++            Config c = base.copy();
++            if (spec == null) return c;
++            for (String entry : spec.split("[,;]")) {
++                entry = entry.trim();
++                if (entry.isEmpty()) continue;
++                int eq = entry.indexOf('=');
++                if (eq <= 0) throw new IllegalArgumentException("not key=value: " + entry);
++                String key = entry.substring(0, eq).trim();
++                float value;
++                try {
++                    value = Float.parseFloat(entry.substring(eq + 1).trim());
++                } catch (NumberFormatException e) {
++                    throw new IllegalArgumentException("bad value: " + entry);
++                }
++                if (Float.isNaN(value) || Float.isInfinite(value) || value < 0) {
++                    throw new IllegalArgumentException("bad value: " + entry);
++                }
++                c.set(key, value);
++            }
++            if (c.density <= 0 || c.pinchDp <= 0 || c.swipeDp <= 0) {
++                throw new IllegalArgumentException("density, pinchDp and swipeDp must be > 0");
++            }
++            return c;
++        }
++
++        static final String[] KEYS = {
++            "density", "edgeDp", "hingeDp", "topDp", "bottomDp", "boundaryDp", "slopDp", "landingMs", "pinchDp",
++            "swipeDp",
++            "dominance", "crossDominance", "sideways", "pinchAgainst", "swipeFollow", "commitFraction"};
++
++        float get(String key) {
++            switch (key) {
++                case "density": return density;
++                case "edgeDp": return edgeDp;
++                case "hingeDp": return hingeDp;
++                case "topDp": return topDp;
++                case "bottomDp": return bottomDp;
++                case "boundaryDp": return boundaryDp;
++                case "slopDp": return slopDp;
++                case "landingMs": return landingMs;
++                case "pinchDp": return pinchDp;
++                case "swipeDp": return swipeDp;
++                case "dominance": return dominance;
++                case "crossDominance": return crossDominance;
++                case "sideways": return sideways;
++                case "pinchAgainst": return pinchAgainst;
++                case "swipeFollow": return swipeFollow;
++                case "commitFraction": return commitFraction;
++                default: throw new IllegalArgumentException("unknown key: " + key);
++            }
++        }
++
++        void set(String key, float v) {
++            switch (key) {
++                case "density": density = v; break;
++                case "edgeDp": edgeDp = v; break;
++                case "hingeDp": hingeDp = v; break;
++                case "topDp": topDp = v; break;
++                case "bottomDp": bottomDp = v; break;
++                case "boundaryDp": boundaryDp = v; break;
++                case "slopDp": slopDp = v; break;
++                case "landingMs": landingMs = v; break;
++                case "pinchDp": pinchDp = v; break;
++                case "swipeDp": swipeDp = v; break;
++                case "dominance": dominance = v; break;
++                case "crossDominance": crossDominance = v; break;
++                case "sideways": sideways = v; break;
++                case "pinchAgainst": pinchAgainst = v; break;
++                case "swipeFollow": swipeFollow = v; break;
++                case "commitFraction": commitFraction = v; break;
++                default: throw new IllegalArgumentException("unknown key: " + key);
++            }
++        }
++
++        @Override
++        public String toString() {
++            StringBuilder sb = new StringBuilder();
++            for (String key : KEYS) {
++                if (sb.length() > 0) sb.append(',');
++                float v = get(key);
++                sb.append(key).append('=').append(v == (int) v ? Integer.toString((int) v) : Float.toString(v));
++            }
++            return sb.toString();
++        }
++    }
++
++    /** The display a touch happens on. */
++    public static final class DisplayState {
++        public final int width;
++        public final int height;
++        public final int rotation;
++        /** {panel 0, panel 1, hinge} as {@link DuoPanelGeometry#layout} returns them; null without two panels. */
++        public final int[][] layout;
++        /** Non-null: count fingers only, and report touches with three fingers as cancelled for this reason. */
++        public final String blockedReason;
++
++        private DisplayState(int width, int height, int rotation, int[][] layout, String blockedReason) {
++            this.width = width;
++            this.height = height;
++            this.rotation = rotation;
++            this.layout = layout;
++            this.blockedReason = blockedReason;
++        }
++
++        /**
++         * The state of a display of this size and rotation on a device with {@code spec}. Recognition needs both
++         * panels (spanned or gapless); a single panel or an unknown size blocks it.
++         */
++        public static DisplayState of(DuoPanelGeometry.Spec spec, int width, int height, int rotation,
++                String blockedReason) {
++            int mode = DuoPanelGeometry.mode(spec, width, height);
++            int[][] layout = null;
++            if (mode == DuoPanelGeometry.MODE_SPANNED || mode == DuoPanelGeometry.MODE_GAPLESS) {
++                layout = DuoPanelGeometry.layout(spec, width, height, rotation);
++            } else if (blockedReason == null) {
++                blockedReason = mode == DuoPanelGeometry.MODE_SINGLE ? "layout-single" : "layout-unknown";
++            }
++            return new DisplayState(width, height, rotation, layout, blockedReason);
++        }
++    }
++
++    /** One report. Distances are display pixels; "across" is along the axis from panel 0 to panel 1. */
++    public static final class Result {
++        public final Event event;
++        public final Gesture gesture;
++        public final Motion motion;
++        /** Fingers that landed on panel 0 and on panel 1. */
++        public final int onPanel0;
++        public final int onPanel1;
++        /** SPAN/CONTRACT: the panel the command is for. PUSH: the panel the app is pushed from. Otherwise -1. */
++        public final int target;
++        /** PUSH: the panel the app is pushed to. Otherwise -1. */
++        public final int to;
++        /** Spread change: mean distance from the centroid on one panel, half the group separation across. */
++        public final float pinchPx;
++        /** Spread ratio (now / at three fingers) on one panel, group separation ratio across the panels. */
++        public final float scale;
++        public final float acrossPx;
++        public final float alongPx;
++        /** Since the third finger landed, or since the first one when three were never tracked together. */
++        public final long durationMs;
++        public final int rotation;
++        public final String reason;
++
++        Result(Event event, Gesture gesture, Motion motion, int onPanel0, int onPanel1, int target, int to,
++                float pinchPx, float scale, float acrossPx, float alongPx, long durationMs, int rotation,
++                String reason) {
++            this.event = event;
++            this.gesture = gesture;
++            this.motion = motion;
++            this.onPanel0 = onPanel0;
++            this.onPanel1 = onPanel1;
++            this.target = target;
++            this.to = to;
++            this.pinchPx = pinchPx;
++            this.scale = scale;
++            this.acrossPx = acrossPx;
++            this.alongPx = alongPx;
++            this.durationMs = durationMs;
++            this.rotation = rotation;
++            this.reason = reason;
++        }
++
++        /** One line of key=value pairs, stable for log parsing. */
++        public String toLogString() {
++            return String.format(Locale.ROOT,
++                    "event=%s gesture=%s motion=%s split=%d+%d target=%d to=%d pinchPx=%+.0f scale=%.2f "
++                            + "acrossPx=%+.0f alongPx=%+.0f ms=%d rot=%d reason=%s",
++                    event, gesture, motion.label, onPanel0, onPanel1, target, to, pinchPx, scale, acrossPx,
++                    alongPx, durationMs, rotation, reason);
++        }
++
++        @Override
++        public String toString() {
++            return toLogString();
++        }
++    }
++
++    private static final int MAX_ID = 32;
++
++    private static final int IDLE = 0;        // no touch
++    private static final int COLLECTING = 1;  // fewer than three fingers so far
++    private static final int TRACKING = 2;    // three fingers: deciding, or following a recognised gesture
++    private static final int REJECTED = 3;    // ineligible; reported when the touch ends, if three fingers were down
++    private static final int DONE = 4;        // reported; ignore the rest of the touch
++
++    private final Environment mEnvironment;
++    private final Callback mCallback;
++    private Config mConfig;
++
++    // Thresholds in pixels, from mConfig, fixed for the duration of a touch.
++    private float mEdgePx, mHingePx, mTopPx, mBottomPx, mBoundaryPx, mSlopPx, mPinchPx, mSwipePx;
++
++    private int mState = IDLE;
++    private DisplayState mDisplay;
++    private String mPendingReason;
++    private long mFirstDownMs;
++    private long mLandingMs;   // when the first of the fingers now collecting landed
++    private boolean mMovedWhileLanding;
++    private long mThreeMs;
++    private int mCounted;      // counted fingers on the screen (not artefacts, not parked)
++    private int mMaxCounted;
++    private int mOn0, mOn1;    // landing panels of the counted fingers while collecting, then of the three
++    private final int[] mTrio = new int[3];
++    private float mUx = 1, mUy;  // unit axis from panel 0 to panel 1
++    private Motion mMotion;    // recognised motion, null while deciding
++    private int mSourcePanel;  // the panel of the three fingers, or the panel holding two of them
++
++    private final boolean[] mActive = new boolean[MAX_ID];   // counted and still tracked (not lifted, not parked)
++    private final int[] mPanel = new int[MAX_ID];
++    private final float[] mX0 = new float[MAX_ID];
++    private final float[] mY0 = new float[MAX_ID];
++    private final float[] mX = new float[MAX_ID];
++    private final float[] mY = new float[MAX_ID];
++    private final float[] mBx = new float[MAX_ID];
++    private final float[] mBy = new float[MAX_ID];
++    private final float[] mGroups = new float[8];  // per panel: x, y, start x, start y
++    private final int[] mGroupSize = new int[2];
++
++    // Metrics of the three fingers, from measure().
++    private float mPinch, mScale = 1, mAcross, mAlong;
++
++    public DuoThreeFingerClassifier(Config config, Environment environment, Callback callback) {
++        mEnvironment = environment;
++        mCallback = callback;
++        setConfig(config);
++    }
++
++    /** New thresholds; a touch in progress keeps the ones it started with. */
++    public void setConfig(Config config) {
++        mConfig = config.copy();
++        if (mState == IDLE) applyConfig();
++    }
++
++    public Config getConfig() {
++        return mConfig.copy();
++    }
++
++    private void applyConfig() {
++        float d = mConfig.density;
++        mEdgePx = mConfig.edgeDp * d;
++        mHingePx = mConfig.hingeDp * d;
++        mTopPx = mConfig.topDp * d;
++        mBottomPx = mConfig.bottomDp * d;
++        mBoundaryPx = mConfig.boundaryDp * d;
++        mSlopPx = mConfig.slopDp * d;
++        mPinchPx = mConfig.pinchDp * d;
++        mSwipePx = mConfig.swipeDp * d;
++    }
++
++    /**
++     * Feeds one motion event: the masked action, the index of the pointer that went down or up, the event time,
++     * and the id and position of each pointer (the first {@code count} entries of the arrays).
++     */
++    public void onTouchEvent(int action, int actionIndex, long timeMs, int count, int[] ids, float[] xs,
++            float[] ys) {
++        switch (action) {
++            case ACTION_DOWN:
++                reset();
++                startTouch(timeMs);
++                pointerDown(ids[actionIndex], xs[actionIndex], ys[actionIndex], timeMs);
++                break;
++            case ACTION_POINTER_DOWN:
++                if (mState == IDLE) return;  // the touch started before we were listening
++                updatePositions(count, ids, xs, ys, timeMs);
++                pointerDown(ids[actionIndex], xs[actionIndex], ys[actionIndex], timeMs);
++                break;
++            case ACTION_MOVE:
++                if (mState == IDLE) return;
++                updatePositions(count, ids, xs, ys, timeMs);
++                afterMove(timeMs);
++                break;
++            case ACTION_POINTER_UP:
++            case ACTION_UP:
++                if (mState == IDLE) return;
++                updatePositions(count, ids, xs, ys, timeMs);
++                pointerUp(ids[actionIndex], timeMs);
++                if (action == ACTION_UP) endTouch(timeMs);
++                break;
++            case ACTION_CANCEL:
++                if (mState == IDLE) return;
++                cancelTouch("input-cancelled", timeMs);
++                endTouch(timeMs);
++                break;
++            default:
++                break;
++        }
++    }
++
++    /**
++     * Gives up on the current touch for an external reason (for example a stylus joined it). A gesture in progress
++     * is reported as cancelled now; an undecided touch is reported when it ends, if it had three fingers.
++     */
++    public void cancelTouch(String reason, long timeMs) {
++        if (mState == TRACKING) {
++            measure();
++            report(Event.CANCEL, reason, timeMs);
++            mState = DONE;
++        } else if (mState == COLLECTING) {
++            reject(reason);
++        }
++    }
++
++    private void reset() {
++        mState = IDLE;
++        mDisplay = null;
++        mPendingReason = null;
++        mCounted = 0;
++        mMaxCounted = 0;
++        mOn0 = 0;
++        mOn1 = 0;
++        mMotion = null;
++        mSourcePanel = -1;
++        mPinch = 0;
++        mScale = 1;
++        mAcross = 0;
++        mAlong = 0;
++        for (int i = 0; i < MAX_ID; i++) mActive[i] = false;
++    }
++
++    private void startTouch(long timeMs) {
++        applyConfig();
++        mDisplay = mEnvironment.atTouchStart();
++        mFirstDownMs = timeMs;
++        mThreeMs = timeMs;
++        mState = COLLECTING;
++        if (mDisplay.blockedReason != null) reject(mDisplay.blockedReason);
++        int[][] l = mDisplay.layout;
++        if (l != null) {
++            float dx = (l[1][0] + l[1][2]) - (l[0][0] + l[0][2]);
++            float dy = (l[1][1] + l[1][3]) - (l[0][1] + l[0][3]);
++            float n = (float) Math.hypot(dx, dy);
++            mUx = n > 0 ? dx / n : 1;
++            mUy = n > 0 ? dy / n : 0;
++        }
++    }
++
++    private void endTouch(long timeMs) {
++        if (mMaxCounted >= 3) {
++            if (mState == REJECTED) {
++                report(Event.CANCEL, mPendingReason, timeMs);
++            } else if (mState == COLLECTING) {
++                report(Event.CANCEL, "no-decision", timeMs);
++            }
++        }
++        reset();
++    }
++
++    private void reject(String reason) {
++        if (mPendingReason == null) mPendingReason = reason;
++        mState = REJECTED;
++    }
++
++    private void pointerDown(int id, float x, float y, long timeMs) {
++        if (id < 0 || id >= MAX_ID || mState == DONE) return;
++        mX0[id] = mX[id] = x;
++        mY0[id] = mY[id] = y;
++        int[][] l = mDisplay.layout;
++        int panel = l == null ? -1 : DuoPanelGeometry.panelAt(l, (int) x, (int) y);
++        // Controller artefacts and parked fingers: on the hinge band or the display boundary.
++        if (onBoundary(x, y) || (l != null && panel < 0)) return;
++        // Brief contacts near the hinge while three fingers are down are artefacts too.
++        if (mState == TRACKING && inHingeZone(panel, x, y)) return;
++        mActive[id] = true;
++        mPanel[id] = panel;
++        mCounted++;
++        mMaxCounted = Math.max(mMaxCounted, mCounted);
++        if (mState == REJECTED) return;
++        if (mState == TRACKING) {
++            measure();
++            report(Event.CANCEL, "fourth-finger", timeMs);
++            mState = DONE;
++            return;
++        }
++        if (mCounted == 1) {
++            mLandingMs = timeMs;
++            mMovedWhileLanding = false;
++        }
++        if (panel == 0) mOn0++; else mOn1++;
++        if (inEdgeZone(panel, x, y)) {
++            reject("edge-start");
++        } else if (mCounted == 3) {
++            if (mMovedWhileLanding && timeMs - mLandingMs > mConfig.landingMs) {
++                reject("moved-before-three");
++            } else {
++                startTracking(timeMs);
++            }
++        }
++    }
++
++    private void updatePositions(int count, int[] ids, float[] xs, float[] ys, long timeMs) {
++        for (int i = 0; i < count; i++) {
++            int id = ids[i];
++            if (id < 0 || id >= MAX_ID || !mActive[id]) continue;
++            if (onBoundary(xs[i], ys[i])) {
++                fingerGone(id, timeMs, "parked");  // slid off an edge; keep its last position on the screen
++            } else {
++                mX[id] = xs[i];
++                mY[id] = ys[i];
++            }
++        }
++    }
++
++    private void pointerUp(int id, long timeMs) {
++        if (id >= 0 && id < MAX_ID && mActive[id]) fingerGone(id, timeMs, "lift");
++    }
++
++    private void fingerGone(int id, long timeMs, String how) {
++        mActive[id] = false;
++        mCounted--;
++        if (mState == COLLECTING) {
++            if (mPanel[id] == 0) mOn0--; else mOn1--;
++            return;
++        }
++        if (mState != TRACKING || !inTrio(id)) return;
++        measure();
++        if (mMotion != null) {
++            finish(how, timeMs);
++        } else if (!movedSinceTracking()) {
++            // A bouncing or hesitating finger: wait for three fingers again.
++            mState = COLLECTING;
++            if (mPanel[id] == 0) mOn0--; else mOn1--;
++        } else {
++            report(Event.CANCEL, "lifted-before-decision", timeMs);
++            mState = DONE;
++        }
++    }
++
++    private void afterMove(long timeMs) {
++        if (mState == COLLECTING) {
++            for (int id = 0; id < MAX_ID; id++) {
++                if (mActive[id] && Math.hypot(mX[id] - mX0[id], mY[id] - mY0[id]) > mSlopPx) {
++                    mMovedWhileLanding = true;
++                    break;
++                }
++            }
++            // Fingers may start moving while the others land; later, it is some other one or two finger touch.
++            if (mMovedWhileLanding && timeMs - mLandingMs > mConfig.landingMs) reject("moved-before-three");
++        } else if (mState == TRACKING && mMotion == null) {
++            measure();
++            decide(timeMs);
++        }
++    }
++
++    private void startTracking(long timeMs) {
++        int n = 0;
++        for (int id = 0; id < MAX_ID && n < 3; id++) {
++            if (mActive[id]) mTrio[n++] = id;
++        }
++        // Measure from where the fingers landed, so movement while the others were landing counts.
++        for (int id : mTrio) {
++            mBx[id] = mX0[id];
++            mBy[id] = mY0[id];
++        }
++        mThreeMs = timeMs;
++        mSourcePanel = mOn0 >= 2 ? 0 : 1;
++        mState = TRACKING;
++    }
++
++    private boolean inTrio(int id) {
++        return mTrio[0] == id || mTrio[1] == id || mTrio[2] == id;
++    }
++
++    private boolean across() {
++        return mOn0 > 0 && mOn1 > 0;
++    }
++
++    private boolean movedSinceTracking() {
++        for (int id : mTrio) {
++            if (Math.hypot(mX[id] - mBx[id], mY[id] - mBy[id]) > mSlopPx) return true;
++        }
++        return false;
++    }
++
++    /** Computes mPinch, mScale, mAcross and mAlong for the three fingers. */
++    private void measure() {
++        float tx, ty;
++        if (!across()) {
++            float cx = 0, cy = 0, bx = 0, by = 0;
++            for (int id : mTrio) {
++                cx += mX[id] / 3;
++                cy += mY[id] / 3;
++                bx += mBx[id] / 3;
++                by += mBy[id] / 3;
++            }
++            float r = 0, r0 = 0;
++            for (int id : mTrio) {
++                r += (float) Math.hypot(mX[id] - cx, mY[id] - cy) / 3;
++                r0 += (float) Math.hypot(mBx[id] - bx, mBy[id] - by) / 3;
++            }
++            mPinch = r - r0;
++            mScale = r0 > 0 ? r / r0 : 1;
++            tx = cx - bx;
++            ty = cy - by;
++        } else {
++            float[] g = mGroups;
++            for (int k = 0; k < 8; k++) g[k] = 0;
++            mGroupSize[0] = 0;
++            mGroupSize[1] = 0;
++            for (int id : mTrio) {
++                int p = mPanel[id];
++                mGroupSize[p]++;
++                g[4 * p] += mX[id];
++                g[4 * p + 1] += mY[id];
++                g[4 * p + 2] += mBx[id];
++                g[4 * p + 3] += mBy[id];
++            }
++            for (int p = 0; p < 2; p++) {
++                for (int k = 0; k < 4; k++) g[4 * p + k] /= mGroupSize[p];
++            }
++            float d0x = g[0] - g[2], d0y = g[1] - g[3];
++            float d1x = g[4] - g[6], d1y = g[5] - g[7];
++            mPinch = ((d1x - d0x) * mUx + (d1y - d0y) * mUy) / 2;
++            float sep0 = (g[6] - g[2]) * mUx + (g[7] - g[3]) * mUy;
++            float sep = (g[4] - g[0]) * mUx + (g[5] - g[1]) * mUy;
++            mScale = sep0 != 0 ? sep / sep0 : 1;
++            tx = (d0x + d1x) / 2;
++            ty = (d0y + d1y) / 2;
++        }
++        mAcross = tx * mUx + ty * mUy;
++        mAlong = -tx * mUy + ty * mUx;
++    }
++
++    private void decide(long timeMs) {
++        float pinchScore = Math.abs(mPinch) / mPinchPx;
++        float moveScore = (float) Math.hypot(mAcross, mAlong) / mSwipePx;
++        if (pinchScore < 1 && moveScore < 1) return;
++        Motion pinch = mPinch > 0 ? Motion.PINCH_OUT : Motion.PINCH_IN;
++        String cancel;
++        if (across()) {
++            if (pinchScore < 1) {
++                cancel = "swipe-split";
++            } else if (Math.abs(mPinch) < mConfig.crossDominance * Math.abs(mAcross)) {
++                cancel = "ambiguous";
++            } else if (!pinchAgrees()) {
++                cancel = "fingers-disagree";
++            } else {
++                recognize(pinch, timeMs);
++                return;
++            }
++        } else if (pinchScore >= mConfig.dominance * moveScore) {
++            if (!pinchAgrees()) {
++                cancel = "fingers-disagree";
++            } else {
++                recognize(pinch, timeMs);
++                return;
++            }
++        } else if (moveScore >= mConfig.dominance * pinchScore) {
++            if (Math.abs(mAcross) < mConfig.sideways * Math.abs(mAlong)) {
++                cancel = "not-sideways";
++            } else if (towardOtherPanel() <= 0) {
++                cancel = "away-from-other-panel";
++            } else if (!swipeAgrees()) {
++                cancel = "fingers-disagree";
++            } else {
++                recognize(Motion.SWIPE, timeMs);
++                return;
++            }
++        } else {
++            cancel = "ambiguous";
++        }
++        report(Event.CANCEL, cancel, timeMs);
++        mState = DONE;
++    }
++
++    /** Translation of a single panel touch toward the other panel. */
++    private float towardOtherPanel() {
++        return mSourcePanel == 0 ? mAcross : -mAcross;
++    }
++
++    private boolean pinchAgrees() {
++        float sign = Math.signum(mPinch);
++        float limit = -mConfig.pinchAgainst * Math.abs(mPinch);
++        if (!across()) {
++            float cx = 0, cy = 0, bx = 0, by = 0;
++            for (int id : mTrio) {
++                cx += mX[id] / 3;
++                cy += mY[id] / 3;
++                bx += mBx[id] / 3;
++                by += mBy[id] / 3;
++            }
++            for (int id : mTrio) {
++                float dr = (float) (Math.hypot(mX[id] - cx, mY[id] - cy) - Math.hypot(mBx[id] - bx, mBy[id] - by));
++                if (sign * dr < limit) return false;
++            }
++        } else {
++            for (int id : mTrio) {
++                float d = (mX[id] - mBx[id]) * mUx + (mY[id] - mBy[id]) * mUy;
++                float expected = (mPanel[id] == 1 ? 1 : -1) * sign;
++                if (expected * d < limit) return false;
++            }
++        }
++        return true;
++    }
++
++    private boolean swipeAgrees() {
++        float wx = mSourcePanel == 0 ? mUx : -mUx;
++        float wy = mSourcePanel == 0 ? mUy : -mUy;
++        float need = mConfig.swipeFollow * towardOtherPanel();
++        for (int id : mTrio) {
++            if ((mX[id] - mBx[id]) * wx + (mY[id] - mBy[id]) * wy < need) return false;
++        }
++        return true;
++    }
++
++    private void recognize(Motion motion, long timeMs) {
++        mMotion = motion;
++        report(Event.RECOGNIZED, motion == Motion.SWIPE ? "swipe" : "pinch", timeMs);
++    }
++
++    private void finish(String how, long timeMs) {
++        boolean commit;
++        if (mMotion == Motion.SWIPE) {
++            commit = towardOtherPanel() >= mConfig.commitFraction * mSwipePx;
++        } else {
++            float signed = mMotion == Motion.PINCH_OUT ? mPinch : -mPinch;
++            commit = signed >= mConfig.commitFraction * mPinchPx;
++        }
++        report(commit ? Event.COMMIT : Event.CANCEL, commit ? how : "reversed", timeMs);
++        mState = DONE;
++    }
++
++    private void report(Event event, String reason, long timeMs) {
++        Motion motion = mMotion != null ? mMotion : Motion.NONE;
++        Gesture gesture = Gesture.NONE;
++        int target = -1;
++        int to = -1;
++        if (motion == Motion.PINCH_OUT || motion == Motion.PINCH_IN) {
++            gesture = motion == Motion.PINCH_OUT ? Gesture.SPAN : Gesture.CONTRACT;
++            target = mSourcePanel;
++        } else if (motion == Motion.SWIPE) {
++            gesture = Gesture.PUSH;
++            target = mSourcePanel;
++            to = 1 - mSourcePanel;
++        }
++        boolean tracked = mState == TRACKING || mMotion != null;
++        long since = tracked ? mThreeMs : mFirstDownMs;
++        mCallback.onResult(new Result(event, gesture, motion, mOn0, mOn1, target, to,
++                tracked ? mPinch : 0, tracked ? mScale : 1, tracked ? mAcross : 0, tracked ? mAlong : 0,
++                timeMs - since, mDisplay.rotation, reason));
++    }
++
++    private boolean onBoundary(float x, float y) {
++        float b = mBoundaryPx;
++        return x < b || y < b || x > mDisplay.width - 1 - b || y > mDisplay.height - 1 - b;
++    }
++
++    /** Within the edge-swipe zone of its panel: outer edges, hinge-side edge, display top and bottom. */
++    private boolean inEdgeZone(int panel, float x, float y) {
++        int[][] l = mDisplay.layout;
++        if (l == null || panel < 0) return false;
++        int[] r = l[panel];
++        float left = r[0] <= 0 ? mEdgePx : mHingePx;
++        float right = r[2] >= mDisplay.width ? mEdgePx : mHingePx;
++        float top = r[1] <= 0 ? mTopPx : mHingePx;
++        float bottom = r[3] >= mDisplay.height ? mBottomPx : mHingePx;
++        return x - r[0] < left || r[2] - x < right || y - r[1] < top || r[3] - y < bottom;
++    }
++
++    /** Within the zone along the hinge-side edge of its panel. */
++    private boolean inHingeZone(int panel, float x, float y) {
++        int[][] l = mDisplay.layout;
++        if (l == null || panel < 0) return false;
++        int[] r = l[panel];
++        return (r[0] > 0 && x - r[0] < mHingePx) || (r[2] < mDisplay.width && r[2] - x < mHingePx)
++                || (r[1] > 0 && y - r[1] < mHingePx) || (r[3] < mDisplay.height && r[3] - y < mHingePx);
++    }
++}
+diff --git a/packages/SystemUI/src/com/android/systemui/duo/gesture/DuoThreeFingerGestureMonitor.java b/packages/SystemUI/src/com/android/systemui/duo/gesture/DuoThreeFingerGestureMonitor.java
+new file mode 100755
+index 000000000..f2c44c916
+--- /dev/null
++++ b/packages/SystemUI/src/com/android/systemui/duo/gesture/DuoThreeFingerGestureMonitor.java
+@@ -0,0 +1,221 @@
++/*
++ * Copyright (C) 2026 The Duo-DE Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package com.android.systemui.duo.gesture;
++
++import android.content.Context;
++import android.database.ContentObserver;
++import android.graphics.Point;
++import android.hardware.display.DisplayManager;
++import android.os.Build;
++import android.os.Handler;
++import android.os.Looper;
++import android.os.SystemClock;
++import android.os.SystemProperties;
++import android.text.TextUtils;
++import android.util.Log;
++import android.view.Choreographer;
++import android.view.Display;
++import android.view.InputDevice;
++import android.view.InputEvent;
++import android.view.MotionEvent;
++
++import androidx.annotation.NonNull;
++
++import com.android.internal.policy.DuoPanelGeometry;
++import com.android.systemui.CoreStartable;
++import com.android.systemui.dagger.SysUISingleton;
++import com.android.systemui.dagger.qualifiers.Main;
++import com.android.systemui.shared.system.InputChannelCompat;
++import com.android.systemui.shared.system.InputMonitorCompat;
++import com.android.systemui.statusbar.policy.KeyguardStateController;
++import com.android.systemui.util.settings.GlobalSettings;
++
++import java.io.PrintWriter;
++import java.util.ArrayDeque;
++import java.util.Objects;
++
++import javax.inject.Inject;
++
++/**
++ * Logging-only prototype of the Surface Duo three-finger app gestures (span, contract, push).
++ *
++ * Watches every touch on the default display through a gesture input monitor and feeds it to
++ * {@link DuoThreeFingerClassifier}, which logs what it recognised under the tag {@code DuoGesture}. It never pilfers
++ * pointers and takes no action, so touch delivery to apps and other system gestures is unchanged.
++ *
++ * Off by default. Runs only on a Surface Duo with the two-panel window policy active
++ * ({@code sys.duode.panels.active=1}) and when {@code settings put global duode_three_finger_gestures 1};
++ * {@code duode_three_finger_gestures_config} overrides thresholds ("pinchDp=30,swipeDp=60"). Both settings apply
++ * without a restart. Touches that start on the keyguard are reported as cancelled with reason {@code keyguard}.
++ */
++@SysUISingleton
++public class DuoThreeFingerGestureMonitor implements CoreStartable {
++    static final String TAG = "DuoGesture";
++    static final String SETTING_ENABLED = "duode_three_finger_gestures";
++    static final String SETTING_CONFIG = "duode_three_finger_gestures_config";
++    static final String PROP_PANELS_ACTIVE = "sys.duode.panels.active";
++
++    private static final int MAX_POINTERS = 32;
++    private static final int RECENT = 20;
++
++    private final Context mContext;
++    private final Handler mMainHandler;
++    private final DisplayManager mDisplayManager;
++    private final GlobalSettings mGlobalSettings;
++    private final KeyguardStateController mKeyguardStateController;
++    private final DuoPanelGeometry.Spec mSpec = DuoPanelGeometry.forDevice(Build.DEVICE);
++
++    private final int[] mIds = new int[MAX_POINTERS];
++    private final float[] mXs = new float[MAX_POINTERS];
++    private final float[] mYs = new float[MAX_POINTERS];
++    private final Point mSize = new Point();
++    private final ArrayDeque<String> mRecent = new ArrayDeque<>();
++
++    private boolean mEnabled;
++    private boolean mPanelsActive;
++    private String mConfigSpec;
++    private String mConfigError;
++    private DuoThreeFingerClassifier.Config mConfig;
++    private DuoThreeFingerClassifier mClassifier;
++    private InputMonitorCompat mInputMonitor;
++    private InputChannelCompat.InputEventReceiver mInputEventReceiver;
++
++    @Inject
++    public DuoThreeFingerGestureMonitor(Context context, @Main Handler mainHandler,
++            DisplayManager displayManager, GlobalSettings globalSettings,
++            KeyguardStateController keyguardStateController) {
++        mContext = context;
++        mMainHandler = mainHandler;
++        mDisplayManager = displayManager;
++        mGlobalSettings = globalSettings;
++        mKeyguardStateController = keyguardStateController;
++    }
++
++    @Override
++    public void start() {
++        if (mSpec == null) return;  // not a Surface Duo
++        ContentObserver observer = new ContentObserver(mMainHandler) {
++            @Override
++            public void onChange(boolean selfChange) {
++                update();
++            }
++        };
++        mGlobalSettings.registerContentObserverAsync(SETTING_ENABLED, observer);
++        mGlobalSettings.registerContentObserverAsync(SETTING_CONFIG, observer);
++        update();
++        Log.i(TAG, "ready on " + Build.DEVICE + ": panelsActive=" + mPanelsActive + " enabled=" + mEnabled
++                + " (settings put global " + SETTING_ENABLED + " 1)");
++    }
++
++    /** Main thread: applies the settings and the panel state. */
++    private void update() {
++        mPanelsActive = SystemProperties.getBoolean(PROP_PANELS_ACTIVE, false);
++        String spec = mGlobalSettings.getString(SETTING_CONFIG);
++        if (mConfig == null || !Objects.equals(spec, mConfigSpec)) {
++            mConfigSpec = spec;
++            mConfig = parseConfig(spec);
++            if (mClassifier != null) {
++                mClassifier.setConfig(mConfig);
++                Log.i(TAG, "config " + mConfig);
++            }
++        }
++        boolean enabled = mPanelsActive && mGlobalSettings.getInt(SETTING_ENABLED, 0) == 1;
++        if (enabled == mEnabled) return;
++        mEnabled = enabled;
++        if (enabled) {
++            mClassifier = new DuoThreeFingerClassifier(mConfig, this::displayAtTouchStart, this::onResult);
++            mInputMonitor = new InputMonitorCompat("duo-three-finger", Display.DEFAULT_DISPLAY);
++            mInputEventReceiver = mInputMonitor.getInputReceiver(Looper.getMainLooper(),
++                    Choreographer.getInstance(), this::onInputEvent);
++            Log.i(TAG, "enabled (logging only, no actions) config " + mConfig);
++        } else {
++            if (mInputEventReceiver != null) mInputEventReceiver.dispose();
++            if (mInputMonitor != null) mInputMonitor.dispose();
++            mInputEventReceiver = null;
++            mInputMonitor = null;
++            mClassifier = null;
++            Log.i(TAG, "disabled (panelsActive=" + mPanelsActive + ")");
++        }
++    }
++
++    private DuoThreeFingerClassifier.Config parseConfig(String spec) {
++        DuoThreeFingerClassifier.Config base = DuoThreeFingerClassifier.Config.forDensity(
++                mContext.getResources().getDisplayMetrics().density);
++        mConfigError = null;
++        if (TextUtils.isEmpty(spec)) return base;
++        try {
++            return DuoThreeFingerClassifier.Config.parse(spec, base);
++        } catch (IllegalArgumentException e) {
++            mConfigError = e.getMessage();
++            Log.w(TAG, "ignoring " + SETTING_CONFIG + "=\"" + spec + "\": " + e.getMessage());
++            return base;
++        }
++    }
++
++    private void onInputEvent(InputEvent ev) {
++        if (!(ev instanceof MotionEvent) || mClassifier == null) return;
++        MotionEvent event = (MotionEvent) ev;
++        if (!event.isFromSource(InputDevice.SOURCE_TOUCHSCREEN)) return;
++        int count = Math.min(event.getPointerCount(), MAX_POINTERS);
++        boolean onlyFingers = true;
++        for (int i = 0; i < count; i++) {
++            mIds[i] = event.getPointerId(i);
++            mXs[i] = event.getX(i);
++            mYs[i] = event.getY(i);
++            onlyFingers &= event.getToolType(i) == MotionEvent.TOOL_TYPE_FINGER;
++        }
++        mClassifier.onTouchEvent(event.getActionMasked(), event.getActionIndex(), event.getEventTime(), count,
++                mIds, mXs, mYs);
++        if (!onlyFingers) mClassifier.cancelTouch("non-finger", event.getEventTime());
++    }
++
++    /** Called at the first finger down of every touch. */
++    private DuoThreeFingerClassifier.DisplayState displayAtTouchStart() {
++        String blocked = mKeyguardStateController.isShowing() ? "keyguard" : null;
++        Display display = mDisplayManager.getDisplay(Display.DEFAULT_DISPLAY);
++        if (display == null) {
++            return DuoThreeFingerClassifier.DisplayState.of(mSpec, 0, 0, 0, "no-display");
++        }
++        display.getRealSize(mSize);
++        return DuoThreeFingerClassifier.DisplayState.of(mSpec, mSize.x, mSize.y, display.getRotation(), blocked);
++    }
++
++    private void onResult(DuoThreeFingerClassifier.Result result) {
++        String line = result.toLogString();
++        Log.i(TAG, line);
++        if (mRecent.size() == RECENT) mRecent.removeFirst();
++        mRecent.addLast(SystemClock.uptimeMillis() + " " + line);
++    }
++
++    @Override
++    public boolean isDumpCritical() {
++        return false;
++    }
++
++    @Override
++    public void dump(@NonNull PrintWriter pw, @NonNull String[] args) {
++        pw.println("DuoThreeFingerGestureMonitor (logging only):");
++        pw.println("  device=" + Build.DEVICE + " spec=" + (mSpec != null));
++        pw.println("  panelsActive=" + mPanelsActive + " enabled=" + mEnabled + " monitor="
++                + (mInputMonitor != null));
++        pw.println("  " + SETTING_CONFIG + "=" + mConfigSpec + (mConfigError != null ? " (ignored: "
++                + mConfigError + ")" : ""));
++        pw.println("  config " + mConfig);
++        pw.println("  recent results (uptime ms):");
++        for (String line : mRecent) pw.println("    " + line);
++    }
++}
+diff --git a/packages/SystemUI/tests/DuoGestureTests/Android.bp b/packages/SystemUI/tests/DuoGestureTests/Android.bp
+new file mode 100755
+index 000000000..07e358924
+--- /dev/null
++++ b/packages/SystemUI/tests/DuoGestureTests/Android.bp
+@@ -0,0 +1,15 @@
++package {
++    default_applicable_licenses: ["frameworks_base_packages_SystemUI_license"],
++}
++
++// Host tests of the pure-Java three-finger gesture classifier: atest --host DuoThreeFingerClassifierTests
++java_test_host {
++    name: "DuoThreeFingerClassifierTests",
++    srcs: [
++        "src/**/*.java",
++        ":SystemUI-duo-three-finger-classifier-src",
++        ":duo-panel-geometry-src",
++    ],
++    static_libs: ["junit"],
++    test_suites: ["general-tests"],
++}
+diff --git a/packages/SystemUI/tests/DuoGestureTests/src/com/android/systemui/duo/gesture/DuoThreeFingerClassifierTest.java b/packages/SystemUI/tests/DuoGestureTests/src/com/android/systemui/duo/gesture/DuoThreeFingerClassifierTest.java
+new file mode 100755
+index 000000000..2f6d91af8
+--- /dev/null
++++ b/packages/SystemUI/tests/DuoGestureTests/src/com/android/systemui/duo/gesture/DuoThreeFingerClassifierTest.java
+@@ -0,0 +1,395 @@
++/*
++ * Copyright (C) 2026 The Duo-DE Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package com.android.systemui.duo.gesture;
++
++import static org.junit.Assert.assertEquals;
++import static org.junit.Assert.assertTrue;
++import static org.junit.Assert.fail;
++
++import com.android.systemui.duo.gesture.DuoThreeFingerClassifier.Config;
++import com.android.systemui.duo.gesture.DuoThreeFingerClassifier.DisplayState;
++import com.android.systemui.duo.gesture.DuoThreeFingerClassifier.Result;
++
++import org.junit.Test;
++import org.junit.runner.RunWith;
++import org.junit.runners.JUnit4;
++
++import java.util.Arrays;
++import java.util.Collections;
++import java.util.List;
++
++/**
++ * Host tests for {@link DuoThreeFingerClassifier} on synthetic touch streams. Duo 1 spanned display, rotation 0:
++ * panel 0 is x [0, 1350), the hinge band [1350, 1434), panel 1 [1434, 2784); 2.5 px/dp, so the default thresholds
++ * are a 100 px pinch, a 200 px swipe, 60 px side and hinge zones, 80 px top and 120 px bottom zones.
++ */
++@RunWith(JUnit4.class)
++public class DuoThreeFingerClassifierTest {
++    private static final float[] P0 = {675, 900};   // centre of panel 0
++    private static final float[] P1 = {2109, 900};  // centre of panel 1
++
++    /** Three fingers in a triangle of radius {@code r} around (cx, cy), ids 0, 1, 2. */
++    private static TouchScript three(TouchScript s, float cx, float cy, float r) {
++        return s.down(0, cx, cy - r)
++                .down(1, cx - 0.866f * r, cy + 0.5f * r)
++                .down(2, cx + 0.866f * r, cy + 0.5f * r);
++    }
++
++    private static List<String> list(String... s) {
++        return Arrays.asList(s);
++    }
++
++    @Test
++    public void pinchOutOnPanel0SpansThatPanel() {
++        TouchScript s = three(new TouchScript(), P0[0], P0[1], 150).hold(3).spread(20, 200).upAll();
++        assertEquals(list("RECOGNIZED SPAN 0 pinch", "COMMIT SPAN 0 lift"), s.summary());
++        Result r = s.results.get(0);
++        assertEquals(3, r.onPanel0);
++        assertEquals(0, r.onPanel1);
++        assertTrue(r.pinchPx >= 100 && r.pinchPx < 120);
++        assertTrue(r.scale > 1.6f);
++        assertTrue(Math.abs(r.acrossPx) < 5 && Math.abs(r.alongPx) < 5);
++    }
++
++    @Test
++    public void pinchInOnPanel1ContractsOntoThatPanel() {
++        TouchScript s = three(new TouchScript(), P1[0], P1[1], 250).spread(20, -200).upAll();
++        assertEquals(list("RECOGNIZED CONTRACT 1 pinch", "COMMIT CONTRACT 1 lift"), s.summary());
++        assertEquals(0, s.results.get(0).onPanel0);
++        assertEquals(3, s.results.get(0).onPanel1);
++    }
++
++    @Test
++    public void pinchOutAcrossThePanelsSpansTheMajorityPanel() {
++        TouchScript s = new TouchScript().down(0, 1000, 700).down(1, 1000, 1100).down(2, 1700, 900)
++                .move(20, 0, -200, 0, 1, -200, 0, 2, 200, 0).upAll();
++        assertEquals(list("RECOGNIZED SPAN 0 pinch", "COMMIT SPAN 0 lift"), s.summary());
++        Result r = s.results.get(0);
++        assertEquals(2, r.onPanel0);
++        assertEquals(1, r.onPanel1);
++        assertTrue(r.scale > 1);
++    }
++
++    @Test
++    public void pinchInAcrossThePanelsContractsOntoThePanelWithTwoFingers() {
++        TouchScript s = new TouchScript().down(0, 900, 900).down(1, 1800, 700).down(2, 1800, 1100)
++                .move(20, 0, 250, 0, 1, -250, 0, 2, -250, 0).upAll();
++        assertEquals(list("RECOGNIZED CONTRACT 1 pinch", "COMMIT CONTRACT 1 lift"), s.summary());
++        assertTrue(s.results.get(0).scale < 1);
++    }
++
++    @Test
++    public void pinchAcrossWithAnAnchoredThumbIsStillAPinch() {
++        // Thumb on panel 0 stays, the two fingers on panel 1 spread away from it.
++        TouchScript s = new TouchScript().down(0, 1000, 900).down(1, 1700, 700).down(2, 1700, 1100)
++                .move(20, 1, 300, 0, 2, 300, 0).upAll();
++        assertEquals(list("RECOGNIZED SPAN 1 pinch", "COMMIT SPAN 1 lift"), s.summary());
++    }
++
++    @Test
++    public void sidewaysSwipeTowardTheOtherPanelPushes() {
++        TouchScript right = three(new TouchScript(), P0[0], P0[1], 150).moveAll(20, 400, 0).upAll();
++        assertEquals(list("RECOGNIZED PUSH 0>1 swipe", "COMMIT PUSH 0>1 lift"), right.summary());
++        TouchScript left = three(new TouchScript(), P1[0], P1[1], 150).moveAll(20, -400, 0).upAll();
++        assertEquals(list("RECOGNIZED PUSH 1>0 swipe", "COMMIT PUSH 1>0 lift"), left.summary());
++    }
++
++    @Test
++    public void swipeAwayFromTheOtherPanelIsCancelled() {
++        TouchScript s = three(new TouchScript(), P0[0], P0[1], 150).moveAll(20, -400, 0).upAll();
++        assertEquals(list("CANCEL NONE away-from-other-panel"), s.summary());
++    }
++
++    @Test
++    public void verticalSwipeIsCancelled() {
++        TouchScript s = three(new TouchScript(), P0[0], P0[1], 150).moveAll(20, 60, 300).upAll();
++        assertEquals(list("CANCEL NONE not-sideways"), s.summary());
++    }
++
++    @Test
++    public void swipeWithFingersOnBothPanelsIsCancelled() {
++        TouchScript s = new TouchScript().down(0, 1000, 700).down(1, 1000, 1100).down(2, 1700, 900)
++                .moveAll(20, 300, 0).upAll();
++        assertEquals(list("CANCEL NONE swipe-split"), s.summary());
++    }
++
++    @Test
++    public void pinchAndSwipeTogetherAreAmbiguous() {
++        // Radial 150 px plus a 300 px translation: both reach their threshold together.
++        TouchScript s = three(new TouchScript(), P0[0], P0[1], 150)
++                .move(20, 0, 300, -150, 1, 300 - 129.9f, 75, 2, 300 + 129.9f, 75).upAll();
++        assertEquals(list("CANCEL NONE ambiguous"), s.summary());
++    }
++
++    @Test
++    public void aFingerMovingAgainstThePinchIsRejected() {
++        // Across the panels: one panel 0 finger moves toward the hinge while the others spread.
++        TouchScript s = new TouchScript().down(0, 1000, 700).down(1, 1000, 1100).down(2, 1700, 900)
++                .move(20, 0, -300, 0, 1, 150, 0, 2, 300, 0).upAll();
++        assertEquals(list("CANCEL NONE fingers-disagree"), s.summary());
++    }
++
++    @Test
++    public void reversingBeforeLiftCancels() {
++        TouchScript s = three(new TouchScript(), P0[0], P0[1], 150).spread(20, 200).spread(20, -180).upAll();
++        assertEquals(list("RECOGNIZED SPAN 0 pinch", "CANCEL SPAN 0 reversed"), s.summary());
++    }
++
++    @Test
++    public void swipeBackBeforeLiftCancels() {
++        TouchScript s = three(new TouchScript(), P0[0], P0[1], 150).moveAll(20, 300, 0).moveAll(20, -250, 0)
++                .upAll();
++        assertEquals(list("RECOGNIZED PUSH 0>1 swipe", "CANCEL PUSH 0>1 reversed"), s.summary());
++    }
++
++    @Test
++    public void startInAnEdgeZoneIsIneligible() {
++        float[][] starts = {
++            {1320, 900},  // 30 px from the hinge, panel 0
++            {1460, 900},  // 26 px from the hinge, panel 1
++            {40, 900},    // outer left edge
++            {2750, 900},  // outer right edge
++            {675, 50},    // status bar
++            {675, 1700},  // navigation area
++        };
++        for (float[] p : starts) {
++            TouchScript s = new TouchScript().down(0, p[0], p[1]);
++            float cx = p[0] < 1392 ? P0[0] : P1[0];
++            s.down(1, cx, 800).down(2, cx + 100, 1000).spread(20, 200).upAll();
++            assertEquals("start " + p[0] + "," + p[1], list("CANCEL NONE edge-start"), s.summary());
++        }
++    }
++
++    @Test
++    public void aFourthFingerCancels() {
++        TouchScript before = three(new TouchScript(), P0[0], P0[1], 150).down(3, 300, 900).spread(20, 200)
++                .upAll();
++        assertEquals(list("CANCEL NONE fourth-finger"), before.summary());
++        TouchScript after = three(new TouchScript(), P0[0], P0[1], 150).spread(20, 200).down(3, 300, 900)
++                .upAll();
++        assertEquals(list("RECOGNIZED SPAN 0 pinch", "CANCEL SPAN 0 fourth-finger"), after.summary());
++    }
++
++    @Test
++    public void movingBeforeTheThirdFingerIsIneligible() {
++        TouchScript s = new TouchScript().down(0, 600, 800).down(1, 800, 800).hold(30)
++                .move(10, 0, 100, 0, 1, 100, 0).down(2, 700, 1000).spread(20, 200).upAll();
++        assertEquals(list("CANCEL NONE moved-before-three"), s.summary());
++        // Moving within the landing window, but the third finger comes too late.
++        TouchScript late = new TouchScript().down(0, 600, 800).down(1, 800, 800).move(5, 0, 100, 0, 1, 100, 0)
++                .hold(30).down(2, 700, 1000).spread(20, 200).upAll();
++        assertEquals(list("CANCEL NONE moved-before-three"), late.summary());
++    }
++
++    @Test
++    public void fingersMayMoveWhileTheOthersLand() {
++        // The first two fingers already spread before the third lands, 120 ms after the first.
++        TouchScript s = new TouchScript().down(0, 675, 800).move(5, 0, 0, -60).down(1, 545, 975)
++                .move(5, 0, 0, -20, 1, -40, 20).down(2, 805, 975).spread(10, 70).upAll();
++        assertEquals(list("RECOGNIZED SPAN 0 pinch", "COMMIT SPAN 0 lift"), s.summary());
++        assertTrue(s.results.get(1).pinchPx > 100);
++    }
++
++    @Test
++    public void aBouncingThirdFingerIsTolerated() {
++        TouchScript s = new TouchScript().down(0, 675, 750).down(1, 545, 975).hold(20)
++                .down(2, 805, 975).hold(1).up(2).hold(20).down(2, 800, 980).spread(20, 200).upAll();
++        assertEquals(list("RECOGNIZED SPAN 0 pinch", "COMMIT SPAN 0 lift"), s.summary());
++    }
++
++    @Test
++    public void liftingBeforeADecisionCancels() {
++        TouchScript s = three(new TouchScript(), P0[0], P0[1], 150).spread(5, 60).up(1).upAll();
++        assertEquals(list("CANCEL NONE lifted-before-decision"), s.summary());
++    }
++
++    @Test
++    public void aThreeFingerTapIsNoDecision() {
++        TouchScript s = three(new TouchScript(), P0[0], P0[1], 150).hold(5).upAll();
++        assertEquals(list("CANCEL NONE no-decision"), s.summary());
++    }
++
++    @Test
++    public void heldStillThenPinchedIsRecognised() {
++        TouchScript s = three(new TouchScript(), P0[0], P0[1], 150).hold(600).spread(20, 200).upAll();
++        assertEquals(list("RECOGNIZED SPAN 0 pinch", "COMMIT SPAN 0 lift"), s.summary());
++    }
++
++    @Test
++    public void fewerThanThreeFingersReportNothing() {
++        TouchScript s = new TouchScript().down(0, 600, 800).down(1, 800, 1000).spread(20, 300).upAll()
++                .down(0, 600, 800).moveAll(30, 1500, 0).upAll();
++        assertEquals(Collections.emptyList(), s.summary());
++    }
++
++    @Test
++    public void keyguardBlocksRecognition() {
++        TouchScript s = new TouchScript(DisplayState.of(TouchScript.DUO, 2784, 1800, 0, "keyguard"),
++                Config.forDensity(2.5f));
++        three(s, P0[0], P0[1], 150).spread(20, 200).upAll();
++        assertEquals(list("CANCEL NONE keyguard"), s.summary());
++    }
++
++    @Test
++    public void aSinglePanelOrUnknownDisplayBlocksRecognition() {
++        TouchScript single = new TouchScript(DisplayState.of(TouchScript.DUO, 1350, 1800, 0, null),
++                Config.forDensity(2.5f));
++        three(single, P0[0], P0[1], 150).spread(20, 200).upAll();
++        assertEquals(list("CANCEL NONE layout-single"), single.summary());
++        TouchScript unknown = new TouchScript(DisplayState.of(TouchScript.DUO, 1080, 1920, 0, null),
++                Config.forDensity(2.5f));
++        three(unknown, 540, 900, 150).spread(20, 200).upAll();
++        assertEquals(list("CANCEL NONE layout-unknown"), unknown.summary());
++        TouchScript notDuo = new TouchScript(DisplayState.of(null, 2784, 1800, 0, null), Config.forDensity(2.5f));
++        three(notDuo, P0[0], P0[1], 150).spread(20, 200).upAll();
++        assertEquals(list("CANCEL NONE layout-unknown"), notDuo.summary());
++    }
++
++    @Test
++    public void gaplessDisplayWorks() {
++        TouchScript s = new TouchScript(DisplayState.of(TouchScript.DUO, 2700, 1800, 0, null),
++                Config.forDensity(2.5f));
++        three(s, 2025, 900, 150).moveAll(20, -400, 0).upAll();
++        assertEquals(list("RECOGNIZED PUSH 1>0 swipe", "COMMIT PUSH 1>0 lift"), s.summary());
++    }
++
++    @Test
++    public void otherRotationsUseTheAxisAcrossTheHinge() {
++        for (int rot = 1; rot < 4; rot++) {
++            // Pinch-out on panel 0, given in natural coordinates.
++            TouchScript pinch = new TouchScript(TouchScript.rotated(rot), Config.forDensity(2.5f));
++            downRotated(pinch, rot, P0[0], P0[1], 150);
++            pinch.spread(20, 200).upAll();
++            assertEquals("rot " + rot, list("RECOGNIZED SPAN 0 pinch", "COMMIT SPAN 0 lift"), pinch.summary());
++            assertEquals(rot, pinch.results.get(0).rotation);
++
++            // Push from panel 0 toward panel 1: +x in natural coordinates.
++            TouchScript push = new TouchScript(TouchScript.rotated(rot), Config.forDensity(2.5f));
++            downRotated(push, rot, P0[0], P0[1], 150);
++            float[] d = rotatedDelta(rot, 400, 0);
++            push.moveAll(20, d[0], d[1]).upAll();
++            assertEquals("rot " + rot, list("RECOGNIZED PUSH 0>1 swipe", "COMMIT PUSH 0>1 lift"), push.summary());
++            assertTrue(push.results.get(0).acrossPx > 150);
++
++            // Along the hinge is not sideways.
++            TouchScript along = new TouchScript(TouchScript.rotated(rot), Config.forDensity(2.5f));
++            downRotated(along, rot, P1[0], P1[1], 150);
++            float[] v = rotatedDelta(rot, 0, 300);
++            along.moveAll(20, v[0], v[1]).upAll();
++            assertEquals("rot " + rot, list("CANCEL NONE not-sideways"), along.summary());
++        }
++    }
++
++    private static void downRotated(TouchScript s, int rot, float cx, float cy, float r) {
++        float[][] pts = {{cx, cy - r}, {cx - 0.866f * r, cy + 0.5f * r}, {cx + 0.866f * r, cy + 0.5f * r}};
++        for (int i = 0; i < 3; i++) {
++            float[] p = TouchScript.rotate(pts[i][0], pts[i][1], rot);
++            s.down(i, p[0], p[1]);
++        }
++    }
++
++    private static float[] rotatedDelta(int rot, float dx, float dy) {
++        float[] a = TouchScript.rotate(1000, 900, rot);
++        float[] b = TouchScript.rotate(1000 + dx, 900 + dy, rot);
++        return new float[] {b[0] - a[0], b[1] - a[1]};
++    }
++
++    @Test
++    public void contactsOnTheBoundaryOrTheHingeBandAreIgnored() {
++        TouchScript s = new TouchScript().down(5, 500, 2).down(6, 1390, 900);
++        three(s, P0[0], P0[1], 150).spread(20, 200, 0, 1, 2).upAll();
++        assertEquals(list("RECOGNIZED SPAN 0 pinch", "COMMIT SPAN 0 lift"), s.summary());
++    }
++
++    @Test
++    public void aBriefContactNearTheHingeDuringAGestureIsIgnored() {
++        TouchScript s = three(new TouchScript(), P0[0], P0[1], 150).spread(5, 40).down(7, 1445, 1710).hold(10)
++                .up(7).spread(15, 160).upAll();
++        assertEquals(list("RECOGNIZED SPAN 0 pinch", "COMMIT SPAN 0 lift"), s.summary());
++    }
++
++    @Test
++    public void aFingerSlidingOffTheEdgeEndsTheGesture() {
++        TouchScript s = three(new TouchScript(), P0[0], P0[1], 150).moveAll(40, 2200, 0).upAll();
++        assertEquals(list("RECOGNIZED PUSH 0>1 swipe", "COMMIT PUSH 0>1 parked"), s.summary());
++    }
++
++    @Test
++    public void inputCancelEndsTheGesture() {
++        TouchScript s = three(new TouchScript(), P0[0], P0[1], 150).spread(20, 200).cancel();
++        assertEquals(list("RECOGNIZED SPAN 0 pinch", "CANCEL SPAN 0 input-cancelled"), s.summary());
++        TouchScript early = three(new TouchScript(), P0[0], P0[1], 150).cancel();
++        assertEquals(list("CANCEL NONE input-cancelled"), early.summary());
++    }
++
++    @Test
++    public void anExternalCancelBlocksTheTouch() {
++        TouchScript s = new TouchScript().down(0, 600, 800);
++        s.classifier.cancelTouch("non-finger", s.time());
++        s.down(1, 700, 800).down(2, 650, 1000).spread(20, 200).upAll();
++        assertEquals(list("CANCEL NONE non-finger"), s.summary());
++    }
++
++    @Test
++    public void consecutiveTouchesAreIndependent() {
++        TouchScript s = three(new TouchScript(), P0[0], P0[1], 150).moveAll(20, -400, 0).upAll();
++        three(s, P1[0], P1[1], 150).spread(20, 200).upAll();
++        assertEquals(list("CANCEL NONE away-from-other-panel", "RECOGNIZED SPAN 1 pinch", "COMMIT SPAN 1 lift"),
++                s.summary());
++    }
++
++    @Test
++    public void logLineIsStable() {
++        TouchScript s = three(new TouchScript(), P0[0], P0[1], 150).spread(20, 200).upAll();
++        String line = s.results.get(0).toLogString();
++        assertTrue(line, line.matches("event=RECOGNIZED gesture=SPAN motion=pinch-out split=3\\+0 target=0 to=-1 "
++                + "pinchPx=\\+1\\d\\d scale=1\\.\\d\\d acrossPx=[+-]\\d+ alongPx=[+-]\\d+ ms=\\d+ rot=0 "
++                + "reason=pinch"));
++    }
++
++    @Test
++    public void configParsesOverrides() {
++        Config base = Config.forDensity(2.5f);
++        Config c = Config.parse(" pinchDp=30, swipeDp = 100;dominance=3,, ", base);
++        assertEquals(30, c.pinchDp, 0);
++        assertEquals(100, c.swipeDp, 0);
++        assertEquals(3, c.dominance, 0);
++        assertEquals(2.5f, c.density, 0);
++        assertEquals(40, base.pinchDp, 0);  // base untouched
++        assertEquals(c.toString(), Config.parse(c.toString(), new Config()).toString());
++        assertEquals(base.toString(), Config.parse(null, base).toString());
++        for (String bad : new String[] {"nope=1", "pinchDp", "pinchDp=x", "pinchDp=-1", "pinchDp=0", "=3"}) {
++            try {
++                Config.parse(bad, base);
++                fail(bad);
++            } catch (IllegalArgumentException expected) {
++                // expected
++            }
++        }
++    }
++
++    @Test
++    public void configChangesApplyFromTheNextTouch() {
++        TouchScript s = new TouchScript();
++        three(s, P0[0], P0[1], 150);
++        s.classifier.setConfig(Config.parse("pinchDp=200", Config.forDensity(2.5f)));
++        s.spread(20, 200).upAll();  // still the 100 px threshold
++        three(s, P0[0], P0[1], 150).spread(20, 200).upAll();  // 500 px now: no decision before the lift
++        assertEquals(list("RECOGNIZED SPAN 0 pinch", "COMMIT SPAN 0 lift", "CANCEL NONE lifted-before-decision"),
++                s.summary());
++    }
++}
+diff --git a/packages/SystemUI/tests/DuoGestureTests/src/com/android/systemui/duo/gesture/TouchScript.java b/packages/SystemUI/tests/DuoGestureTests/src/com/android/systemui/duo/gesture/TouchScript.java
+new file mode 100755
+index 000000000..f2fca3056
+--- /dev/null
++++ b/packages/SystemUI/tests/DuoGestureTests/src/com/android/systemui/duo/gesture/TouchScript.java
+@@ -0,0 +1,200 @@
++/*
++ * Copyright (C) 2026 The Duo-DE Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package com.android.systemui.duo.gesture;
++
++import com.android.internal.policy.DuoPanelGeometry;
++
++import java.util.ArrayList;
++import java.util.List;
++import java.util.TreeMap;
++
++/**
++ * Synthetic touch streams for {@link DuoThreeFingerClassifier}, shaped like Android's: pointers ordered by id, one
++ * ACTION_(POINTER_)DOWN/UP per pointer, a MOVE with every pointer per 10 ms frame.
++ */
++final class TouchScript {
++    static final DuoPanelGeometry.Spec DUO = DuoPanelGeometry.DUO;
++
++    final List<DuoThreeFingerClassifier.Result> results = new ArrayList<>();
++    final DuoThreeFingerClassifier classifier;
++    private final TreeMap<Integer, float[]> mPointers = new TreeMap<>();
++    private DuoThreeFingerClassifier.DisplayState mDisplay;
++    private long mTime = 1000;
++
++    TouchScript() {
++        this(DuoThreeFingerClassifier.DisplayState.of(DUO, 2784, 1800, 0, null),
++                DuoThreeFingerClassifier.Config.forDensity(2.5f));
++    }
++
++    TouchScript(DuoThreeFingerClassifier.DisplayState display, DuoThreeFingerClassifier.Config config) {
++        mDisplay = display;
++        classifier = new DuoThreeFingerClassifier(config, () -> mDisplay, results::add);
++    }
++
++    /** A display state for a rotation of the spanned Duo display. */
++    static DuoThreeFingerClassifier.DisplayState rotated(int rotation) {
++        boolean portrait = (rotation & 1) == 1;
++        return DuoThreeFingerClassifier.DisplayState.of(DUO, portrait ? 1800 : 2784, portrait ? 2784 : 1800,
++                rotation, null);
++    }
++
++    void setDisplay(DuoThreeFingerClassifier.DisplayState display) {
++        mDisplay = display;
++    }
++
++    /** Maps a point given in the natural (rotation 0, 2784 x 1800) display to the display at {@code rotation}. */
++    static float[] rotate(float x, float y, int rotation) {
++        float w = 2784, h = 1800;
++        switch (rotation & 3) {
++            case 1: return new float[] {y, w - x};
++            case 2: return new float[] {w - x, h - y};
++            case 3: return new float[] {h - y, x};
++            default: return new float[] {x, y};
++        }
++    }
++
++    TouchScript down(int id, float x, float y) {
++        mTime += 10;
++        mPointers.put(id, new float[] {x, y});
++        int action = mPointers.size() == 1 ? DuoThreeFingerClassifier.ACTION_DOWN
++                : DuoThreeFingerClassifier.ACTION_POINTER_DOWN;
++        send(action, indexOf(id));
++        return this;
++    }
++
++    TouchScript up(int id) {
++        mTime += 10;
++        int action = mPointers.size() == 1 ? DuoThreeFingerClassifier.ACTION_UP
++                : DuoThreeFingerClassifier.ACTION_POINTER_UP;
++        send(action, indexOf(id));
++        mPointers.remove(id);
++        return this;
++    }
++
++    TouchScript upAll() {
++        while (!mPointers.isEmpty()) up(mPointers.firstKey());
++        return this;
++    }
++
++    TouchScript cancel() {
++        mTime += 10;
++        send(DuoThreeFingerClassifier.ACTION_CANCEL, 0);
++        mPointers.clear();
++        return this;
++    }
++
++    TouchScript hold(int frames) {
++        for (int i = 0; i < frames; i++) {
++            mTime += 10;
++            send(DuoThreeFingerClassifier.ACTION_MOVE, 0);
++        }
++        return this;
++    }
++
++    /**
++     * Moves pointers by the given offsets over {@code frames} frames: {@code moves} holds (id, dx, dy) triples.
++     * Pointers not named stay put.
++     */
++    TouchScript move(int frames, float... moves) {
++        float[][] start = new float[moves.length / 3][];
++        for (int k = 0; k < moves.length; k += 3) start[k / 3] = mPointers.get((int) moves[k]).clone();
++        for (int f = 1; f <= frames; f++) {
++            for (int k = 0; k < moves.length; k += 3) {
++                float[] p = mPointers.get((int) moves[k]);
++                p[0] = start[k / 3][0] + moves[k + 1] * f / frames;
++                p[1] = start[k / 3][1] + moves[k + 2] * f / frames;
++            }
++            mTime += 10;
++            send(DuoThreeFingerClassifier.ACTION_MOVE, 0);
++        }
++        return this;
++    }
++
++    /** Moves every pointer by (dx, dy) over {@code frames} frames. */
++    TouchScript moveAll(int frames, float dx, float dy) {
++        float[] m = new float[mPointers.size() * 3];
++        int k = 0;
++        for (int id : mPointers.keySet()) {
++            m[k++] = id;
++            m[k++] = dx;
++            m[k++] = dy;
++        }
++        return move(frames, m);
++    }
++
++    /**
++     * Moves the given pointers (all when none is given) radially from their centroid by {@code d} pixels
++     * (negative: inward).
++     */
++    TouchScript spread(int frames, float d, int... only) {
++        List<Integer> ids = new ArrayList<>();
++        if (only.length == 0) {
++            ids.addAll(mPointers.keySet());
++        } else {
++            for (int id : only) ids.add(id);
++        }
++        float cx = 0, cy = 0;
++        for (int id : ids) {
++            cx += mPointers.get(id)[0] / ids.size();
++            cy += mPointers.get(id)[1] / ids.size();
++        }
++        float[] m = new float[ids.size() * 3];
++        int k = 0;
++        for (int id : ids) {
++            float[] p = mPointers.get(id);
++            float len = (float) Math.hypot(p[0] - cx, p[1] - cy);
++            m[k++] = id;
++            m[k++] = d * (p[0] - cx) / len;
++            m[k++] = d * (p[1] - cy) / len;
++        }
++        return move(frames, m);
++    }
++
++    private int indexOf(int id) {
++        return mPointers.headMap(id).size();
++    }
++
++    private void send(int action, int actionIndex) {
++        int n = mPointers.size();
++        int[] ids = new int[n];
++        float[] xs = new float[n];
++        float[] ys = new float[n];
++        int i = 0;
++        for (int id : mPointers.keySet()) {
++            ids[i] = id;
++            xs[i] = mPointers.get(id)[0];
++            ys[i] = mPointers.get(id)[1];
++            i++;
++        }
++        classifier.onTouchEvent(action, actionIndex, mTime, n, ids, xs, ys);
++    }
++
++    long time() {
++        return mTime;
++    }
++
++    /** The results as "EVENT GESTURE target>to reason" strings, for compact assertions. */
++    List<String> summary() {
++        List<String> out = new ArrayList<>();
++        for (DuoThreeFingerClassifier.Result r : results) {
++            String t = r.gesture == DuoThreeFingerClassifier.Gesture.NONE ? ""
++                    : " " + r.target + (r.to >= 0 ? ">" + r.to : "");
++            out.add(r.event + " " + r.gesture + t + " " + r.reason);
++        }
++        return out;
++    }
++}
+-- 
+2.34.1
+
