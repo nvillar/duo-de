@@ -44,9 +44,9 @@ class LaunchIntents(unittest.TestCase):
         self.assertTrue(set(creations) <= allowed, creations)
         self.assertNotRegex(body, r"new Intent\(\s*(this|ProbeHomeActivity\.this)\s*,")
         self.assertNotIn(".setClass(", body)
-        for activity in ("ProbeTestActivity", "ProbeLockedTestActivity"):
+        for activity in ("ProbeTestActivity", "ProbeOtherTestActivity", "ProbeLockedTestActivity"):
             self.assertRegex(body, r"ProbeIntents\.launcher\(new ComponentName\(this, %s\.class\)" % activity)
-        self.assertGreaterEqual(body.count("ProbeIntents.launcher("), 4)
+        self.assertGreaterEqual(body.count("ProbeIntents.launcher("), 5)
 
     def test_launch_refuses_non_launcher_intents(self):
         body = code(read("ProbeHomeActivity.java"))
@@ -70,15 +70,52 @@ class Manifest(unittest.TestCase):
         self.assertIn("android.intent.category.HOME", self.categories(".ProbeHomeActivity"))
 
     def test_test_activities_are_launchable_but_not_launcher_entries(self):
-        for name in (".ProbeTestActivity", ".ProbeLockedTestActivity"):
+        for name in (".ProbeTestActivity", ".ProbeOtherTestActivity", ".ProbeLockedTestActivity"):
             self.assertEqual(self.acts[name].get(A + "exported"), "true", name)
             self.assertNotIn("android.intent.category.LAUNCHER", self.categories(name), name)
         self.assertEqual(self.acts[".ProbeLockedTestActivity"].get(A + "showWhenLocked"), "true")
+
+    def test_each_reusable_test_activity_has_its_own_task_affinity(self):
+        # one reusable probe task per panel (tools/duo-gate): the affinities must differ from each other
+        affinities = [self.acts[n].get(A + "taskAffinity") for n in
+                      (".ProbeTestActivity", ".ProbeOtherTestActivity", ".ProbeLockedTestActivity")]
+        self.assertEqual(len(set(affinities)), 3, affinities)
 
     def test_no_opt_in_to_receiver_side_intent_matching(self):
         # explicit LAUNCHER intents to filter-less activities rely on this staying off (Android 16 Safer Intents)
         for el in self.root.iter():
             self.assertIsNone(el.get(A + "intentMatchingFlags"), el.tag)
+
+
+class GateEvents(unittest.TestCase):
+    """The events tools/duo-gate depends on, and that no editor contents are ever logged."""
+
+    def test_touch_and_targets_events_exist(self):
+        body = code(read("ProbeActivity.java"))
+        self.assertRegex(body, r"public boolean dispatchTouchEvent\(MotionEvent ev\)")
+        self.assertIn("return super.dispatchTouchEvent(ev);", body)
+        raw = read("ProbeActivity.java")
+        for needle in ('log("touch", "action="', '" rawX="', '" rawY="', 'log("targets", s)'):
+            self.assertIn(needle, raw)
+
+    def test_text_event_logs_only_sentinels_and_length(self):
+        raw = read("ProbeTestActivity.java")
+        self.assertIn('Pattern.compile("dgs[0-9a-f]{8}")', raw)
+        watcher = raw[raw.index("class SentinelWatcher"):]
+        logs = re.findall(r"log\(\"text\",(.*?)\);", watcher, re.S)
+        self.assertEqual(len(logs), 1, logs)
+        # only the editor number, the length and the matched sentinel tokens
+        self.assertNotRegex(logs[0], r"\bs\b(?!\.length)|toString|getText")
+        self.assertIn("s.length()", logs[0])
+        self.assertIn('String.join(",", found)', logs[0])
+
+    def test_test_window_registers_its_targets(self):
+        body = read("ProbeTestActivity.java")
+        for name in ("title", "editor1", "editor2", "showIme", "hideIme"):
+            self.assertIn('registerTarget("%s"' % name, body)
+        home = read("ProbeHomeActivity.java")
+        for name in ("toggle", "probeTest", "probeTest2", "probeTestNew", "probeLocked"):
+            self.assertRegex(home, r'side \+ "\.%s"' % name)
 
 
 if __name__ == "__main__":

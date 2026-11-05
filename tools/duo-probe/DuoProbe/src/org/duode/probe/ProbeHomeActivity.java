@@ -91,14 +91,17 @@ public class ProbeHomeActivity extends ProbeActivity {
         toggle.setOnCheckedChangeListener((b, checked) -> setSendDisplayId(checked));
         mDisplayIdToggles.add(toggle);
         column.addView(toggle);
+        registerTarget(side + ".toggle", toggle);
 
-        column.addView(launchButton(side, "Probe test",
-                ProbeIntents.launcher(new ComponentName(this, ProbeTestActivity.class), 0)));
-        column.addView(launchButton(side, "Probe test (new instance)",
+        column.addView(target(side + ".probeTest", launchButton(side, "Probe test",
+                ProbeIntents.launcher(new ComponentName(this, ProbeTestActivity.class), 0))));
+        column.addView(target(side + ".probeTest2", launchButton(side, "Probe test 2 (own task)",
+                ProbeIntents.launcher(new ComponentName(this, ProbeOtherTestActivity.class), 0))));
+        column.addView(target(side + ".probeTestNew", launchButton(side, "Probe test (new instance)",
                 ProbeIntents.launcher(new ComponentName(this, ProbeTestActivity.class),
-                        Intent.FLAG_ACTIVITY_NEW_DOCUMENT | Intent.FLAG_ACTIVITY_MULTIPLE_TASK)));
-        column.addView(launchButton(side, "Probe locked (showWhenLocked)",
-                ProbeIntents.launcher(new ComponentName(this, ProbeLockedTestActivity.class), 0)));
+                        Intent.FLAG_ACTIVITY_NEW_DOCUMENT | Intent.FLAG_ACTIVITY_MULTIPLE_TASK))));
+        column.addView(target(side + ".probeLocked", launchButton(side, "Probe locked (showWhenLocked)",
+                ProbeIntents.launcher(new ComponentName(this, ProbeLockedTestActivity.class), 0))));
 
         PackageManager pm = getPackageManager();
         for (ResolveInfo ri : apps) {
@@ -111,6 +114,11 @@ public class ProbeHomeActivity extends ProbeActivity {
         scroll.setBackgroundColor(color);
         scroll.addView(column);
         return scroll;
+    }
+
+    private View target(String name, View view) {
+        registerTarget(name, view);
+        return view;
     }
 
     private Button launchButton(String side, String label, Intent intent) {

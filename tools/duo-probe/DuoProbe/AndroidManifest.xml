@@ -1,7 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- DuoProbe: dev-only probe for the Surface Duo dual-panel work. Logs with the tag DuoProbe. -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    package="org.duode.probe">
+    package="org.duode.probe"
+    android:versionName="gate-2">
+    <!-- versionName gate-2: touch/text sentinel and targets events, ProbeOtherTestActivity (tools/duo-gate checks it).
+         No versionCode: the platform build injects the SDK level, so adb install -r over an earlier probe still
+         works. -->
 
     <!-- Package visibility: list the launchable apps on the probe home. -->
     <queries>
@@ -48,6 +52,14 @@
             android:name=".ProbeTestActivity"
             android:label="Duo probe test"
             android:exported="true" />
+
+        <!-- The same test window in a second reusable task (own affinity), so each panel can hold one reusable probe
+             task: Probe test on one side, Probe test 2 on the other. -->
+        <activity
+            android:name=".ProbeOtherTestActivity"
+            android:label="Duo probe test 2"
+            android:exported="true"
+            android:taskAffinity="org.duode.probe.other" />
 
         <!-- Keyguard gate: the same test activity, shown over the lock screen, in its own task. -->
         <activity
