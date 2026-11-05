@@ -211,3 +211,48 @@ mkdir -p "$T/tree/packages/apps/DuoProbe"; echo mine > "$T/tree/packages/apps/Du
 if bash "$H/dev/build.sh" --skip-treble-app --with-probe --patch-only "$T/tree" >/dev/null 2>&1; then echo "FAIL foreign DuoProbe accepted"; else
     grep -q mine "$T/tree/packages/apps/DuoProbe/Android.bp" && echo "PASS a foreign packages/apps/DuoProbe is left alone"; fi
 rm -rf "$T/tree/packages"
+# Base-image change on an existing tree: AOSP's obsolete external/chromium-webview checkout.
+echo "---- sync: obsolete AOSP WebView checkout"
+cat > "$T/bin/repo" <<'EOF'
+#!/bin/bash
+case "$1" in
+  sync) if [ -n "${FAKE_SYNC_ERR:-}" ]; then echo "$FAKE_SYNC_ERR" >&2; exit 1; fi; echo "repo sync (stub)" ;;
+  manifest) echo '<manifest/>' > "${@: -1}" ;;
+  *) echo "repo stub $*" ;;
+esac
+EOF
+chmod +x "$T/bin/repo"
+S="$T/synctree"; OW="$S/external/chromium-webview"
+REMOVES_WEBVIEW='<manifest><remove-project name="platform/external/chromium-webview" /></manifest>'
+echo "$REMOVES_WEBVIEW" > "$H/build/dev/pinned.xml"
+mk_old_webview() { # AOSP checkout with LineageOS projects already checked out inside it by a failed sync
+    rm -rf "$S"; mkdir -p "$OW/133.0.6943.137" "$S/.repo"
+    echo external/chromium-webview > "$S/.repo/project.list"
+    git -C "$OW" init -q; echo old > "$OW/133.0.6943.137/README"; echo 'android_app_import { name: "webview" }' > "$OW/Android.bp"
+    git -C "$OW" add -A; git -C "$OW" commit -qm aosp
+    git -C "$OW" config remote.aosp.projectname platform/external/chromium-webview
+    mkdir -p "$OW/patches" "$OW/prebuilt/arm64"
+    git -C "$OW/patches" init -q; echo x > "$OW/patches/README"; git -C "$OW/patches" add -A; git -C "$OW/patches" commit -qm p
+    git -C "$OW/prebuilt/arm64" init -q; echo apk > "$OW/prebuilt/arm64/webview.apk"; git -C "$OW/prebuilt/arm64" add -A; git -C "$OW/prebuilt/arm64" commit -qm a
+    ln -s patches/README "$OW/README"
+}
+mk_old_webview
+bash "$H/dev/sync.sh" "$S" >/dev/null 2>"$T/sync.err" && [ ! -e "$OW" ] \
+    && [ -f "$(ls -d "$S/.duo-dev/obsolete/external-chromium-webview."* | head -n1)/Android.bp" ] && [ -f "$S/.duo-dev/obsolete/.find-ignore" ] \
+    && echo "PASS sync moves a clean obsolete AOSP WebView checkout aside" || { echo "FAIL obsolete WebView move"; cat "$T/sync.err"; }
+mk_old_webview; echo edit >> "$OW/Android.bp"
+if bash "$H/dev/sync.sh" "$S" >/dev/null 2>"$T/sync.err"; then echo "FAIL a modified obsolete WebView checkout was accepted"
+elif [ -d "$OW/.git" ] && grep -q "M Android.bp" "$T/sync.err" && [ ! -d "$S/.duo-dev/obsolete" ]; then echo "PASS a modified obsolete WebView checkout is refused and left in place"
+else echo "FAIL modified obsolete WebView"; cat "$T/sync.err"; fi
+mk_old_webview; echo '<manifest/>' > "$H/build/dev/pinned.xml"
+bash "$H/dev/sync.sh" "$S" >/dev/null 2>&1 && [ -d "$OW/.git" ] && [ ! -d "$S/.duo-dev/obsolete" ] \
+    && echo "PASS the WebView checkout is kept when the manifest does not remove it" || echo "FAIL WebView kept"
+echo "$REMOVES_WEBVIEW" > "$H/build/dev/pinned.xml"
+rm -rf "$S"; mkdir -p "$S"; t0=$SECONDS
+if FAKE_SYNC_ERR="error: external/foo: Cannot remove project: uncommitted changes are present." bash "$H/dev/sync.sh" --attempts 3 "$S" >/dev/null 2>"$T/sync.err"; then echo "FAIL sync error ignored"
+elif grep -q "retrying would not help" "$T/sync.err" && ! grep -q "retrying in" "$T/sync.err" && [ $((SECONDS - t0)) -lt 30 ]; then echo "PASS 'Cannot remove project' stops without retries"
+else echo "FAIL Cannot remove project"; cat "$T/sync.err"; fi
+FAKE_SYNC_ERR="fatal: unable to access 'https://example.invalid/': Could not resolve host" bash "$H/dev/sync.sh" --attempts 1 "$S" >/dev/null 2>"$T/sync.err" || true
+grep -q "not an HTTP 429" "$T/sync.err" && echo "PASS a non-429 sync failure is not reported as rate limiting" || { echo "FAIL non-429 message"; cat "$T/sync.err"; }
+FAKE_SYNC_ERR="error: RPC failed; HTTP 429 curl 22 The requested URL returned error: 429" bash "$H/dev/sync.sh" --attempts 1 "$S" >/dev/null 2>"$T/sync.err" || true
+grep -q "HTTP 429 rate limiting" "$T/sync.err" && echo "PASS an HTTP 429 sync failure is reported as rate limiting" || { echo "FAIL 429 message"; cat "$T/sync.err"; }

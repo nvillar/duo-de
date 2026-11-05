@@ -16,6 +16,8 @@
 # to .repo/local_manifests.disabled/, not deleted. No `git clean`, no reset.
 # Projects carrying DUO-DE patch commits are moved back to their manifest
 # revision by `repo sync`; dev/build.sh re-applies the patches afterwards.
+# A clean checkout of AOSP's obsolete external/chromium-webview (replaced by
+# LineageOS's WebView) is moved to .duo-dev/obsolete/ before syncing.
 # Holds the same tree lock as dev/build.sh, so it never runs during a build.
 
 set -euo pipefail
@@ -30,7 +32,7 @@ WITH_GAPPS=false
 DO_SYNC=true
 TREE_ARG=""
 
-usage() { sed -n '2,19p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,21p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -113,13 +115,57 @@ if [ -d vendor/hardware_overlay/.git ] || [ -f vendor/hardware_overlay/.git ]; t
     fi
 fi
 
+# A tree synced before the LineageOS WebView change still has AOSP's
+# platform/external/chromium-webview checked out at external/chromium-webview.
+# The pinned manifest removes that project and adds LineageOS projects nested
+# inside its path. repo checks the new ones out before deleting the obsolete
+# checkout, which then looks dirty ("Cannot remove project: uncommitted changes
+# are present"), so every sync attempt fails. Move the old checkout aside first,
+# but only if it holds nothing besides those nested projects and links.
+OLD_WEBVIEW=external/chromium-webview
+move_old_webview_aside() {
+    grep -qx "$OLD_WEBVIEW" .repo/project.list 2>/dev/null || return 0
+    [ -e "$OLD_WEBVIEW/.git" ] || return 0
+    grep -qs '<remove-project name="platform/external/chromium-webview"' .repo/local_manifests/*.xml || return 0
+    git -C "$OLD_WEBVIEW" config --get-regexp '^remote\..*\.projectname$' 2>/dev/null \
+        | grep -q ' platform/external/chromium-webview$' || return 0
+    local status line unexpected=()
+    status="$(git -C "$OLD_WEBVIEW" status --porcelain=v1 --untracked-files=normal)" \
+        || die "cannot read the status of the obsolete AOSP $OLD_WEBVIEW checkout; move it out of the tree and rerun"
+    while IFS= read -r line; do
+        case "$line" in
+            ''|'?? patches/'|'?? prebuilt/'|'?? prebuilt/arm64/'|'?? README'|'?? Android.bp') ;;
+            *) unexpected+=("$line") ;;
+        esac
+    done <<<"$status"
+    if [ ${#unexpected[@]} -gt 0 ]; then
+        printf '  %s\n' "${unexpected[@]}" >&2
+        die "the obsolete AOSP $OLD_WEBVIEW checkout has local changes (listed above), so repo cannot replace it with LineageOS's WebView; keep what you need, move $TREE/$OLD_WEBVIEW out of the tree and rerun"
+    fi
+    local dest=".duo-dev/obsolete/external-chromium-webview.$stamp"
+    mkdir -p .duo-dev/obsolete
+    : > .duo-dev/obsolete/.find-ignore   # Soong must not find the old Android.bp
+    log "Moving the obsolete AOSP $OLD_WEBVIEW checkout to $TREE/$dest; delete it when no longer needed"
+    mv -- "$OLD_WEBVIEW" "$dest"
+}
+move_old_webview_aside
+
+SYNC_LOG=.duo-dev/repo-sync.log
 sync_args=(-c --no-clone-bundle --no-tags "-j$JOBS" "--retry-fetches=$RETRY_FETCHES")
 pause=60
 for ((attempt = 1; ; attempt++)); do
     log "Syncing, attempt $attempt/$ATTEMPTS (repo sync ${sync_args[*]})"
-    duo_repo sync "${sync_args[@]}" && break
-    [ "$attempt" -lt "$ATTEMPTS" ] || die "repo sync failed $ATTEMPTS times; on HTTP 429 wait and rerun with fewer --jobs"
-    warn "repo sync failed (HTTP 429 rate limiting is common); retrying in ${pause}s"
+    duo_repo sync "${sync_args[@]}" 2>&1 | tee "$SYNC_LOG" && break
+    if grep -q 'Cannot remove project' "$SYNC_LOG"; then
+        die "repo sync cannot remove an obsolete project that has local changes or untracked files (see above; retrying would not help). Move that directory out of the tree, or clean it, and rerun"
+    fi
+    if grep -qE '\b429\b|Too Many Requests|RESOURCE_EXHAUSTED' "$SYNC_LOG"; then
+        reason="HTTP 429 rate limiting; on repeated failures wait and rerun with fewer --jobs"
+    else
+        reason="not an HTTP 429; see the errors above"
+    fi
+    [ "$attempt" -lt "$ATTEMPTS" ] || die "repo sync failed $ATTEMPTS times ($reason); full output of the last attempt: $TREE/$SYNC_LOG"
+    warn "repo sync failed ($reason); retrying in ${pause}s"
     sleep "$pause"
     pause=$((pause * 2))
 done
