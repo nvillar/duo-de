@@ -119,6 +119,12 @@ class Attempt:
         self.status = FAIL
         self.reasons.append("FAIL: " + reason)
 
+    def incomplete(self, reason: str) -> None:
+        """Evidence found after the attempt was recorded that could not be judged: never better than INCOMPLETE,
+        and an existing FAIL stays FAIL."""
+        self.status = worst(self.status, INCOMPLETE)
+        self.reasons.append("INCOMPLETE: " + reason)
+
     def to_json(self) -> dict:
         return {"index": self.index, "status": self.status, "reasons": self.reasons, "notes": self.notes,
                 "marker": self.marker, "evidence": self.evidence}

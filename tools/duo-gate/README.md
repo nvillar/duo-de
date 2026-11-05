@@ -160,14 +160,16 @@ probe's `targets` event is no longer in the log buffer.
   reachable by input at its panel: the input dispatcher lists its window with touchable flags, frame = panel and
   touchable region = panel (`<empty>` or partial -> FAIL, a region format not understood -> INCOMPLETE). Back also
   requires the gestured task not to be left transformed. After every Home/Back repetition (and its clean-up relaunch)
-  the pair is checked the same way; a broken pair is saved (`extra/*-broken-window.txt`, `*-broken-wmshell.txt`),
-  **fails that repetition**, and is re-created so later repetitions do not inherit it.
+  the pair is checked the same way; a broken pair is saved (`extra/*-broken-window.txt`, `*-broken-wmshell.txt`) and
+  re-created so later repetitions do not inherit it. A definite defect **fails that repetition**; evidence that could
+  not be judged (e.g. an unknown touchable-region format) makes it INCOMPLETE and never turns a FAIL into anything else.
 - A tap or scroll drag is never sent outside the requested panel: bounds that do not intersect it are refused before
   any input, and both drag endpoints must lie in its visible content band.
 - Probe home positions: the home logs `targets` only when its layout changes, so on a home that has been running for
   a while the event can be gone from the log buffer. The uiautomator fallback only sees the focused window (it works
-  right after Home, not once a probe task has focus), so positions found once in a run are kept until the home logs
-  a relayout (`onCreate`, `layout`, `onConfigurationChanged`, `onDestroy`, `targets`). Each fallback writes
+  right after Home, not once a probe task has focus), so positions found once in a run are kept. Positions from either
+  source (a `targets` event or uiautomator) are only used if no home `onCreate`, `layout`, `onConfigurationChanged` or
+  `onDestroy` came after them; a newer `targets` event replaces them. Each fallback writes
   `extra/home-targets-uiautomator-<n>.txt` (control names and bounds, or the dumped window's packages; never text).
 - Minimize evidence accepts the policy's reasons `Home`, `Home from Recents` and `Recents #<n>` (M2.2, fw 0018);
   `DuoRecents` lines are kept in `logcat.txt`.

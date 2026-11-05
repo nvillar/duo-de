@@ -8,7 +8,7 @@ from . import checks as C
 from .adb import AdbError
 from .checks import DUO1, SIDES, Geometry, other
 from .device import HOME_BUTTONS, KEY_ENTER, KEY_HOME, KEY_POWER, KEY_WAKEUP, Device
-from .model import INCOMPLETE, PASS, Check, EvidenceError, Verdict
+from .model import FAIL, INCOMPLETE, PASS, Check, EvidenceError, Verdict, worst
 from .parsers import android_bool, parse_dropbox
 from . import preconditions
 from .preconditions import PROBE_HOME
@@ -129,30 +129,36 @@ def restore_pair(ctx: Ctx, pair: dict, keys: dict, name: str, check: Check | Non
         t = acts.task(pair[side])
         if t is None:
             raise SetupError("task %d (side %s) lost" % (pair[side], side))
-    broken = []
+    found = Verdict()
     for side in SIDES:
         t = acts.task(pair[side])
         states = {a.state for a in t.activities}
         if t.force_hidden & C.POLICY_HIDDEN or not t.visible or "RESUMED" not in states:
             v = relaunch(ctx, side, keys[side], pair[side], "%s.%s" % (name, side))
-            if not v.ok:
-                broken += ["relaunch on %s: %s" % (side, r) for r in v.reasons]
+            found.status = worst(found.status, v.status)
+            found.reasons += ["relaunch on %s: %s" % (side, r) for r in v.reasons]
     snap = dev.snap(name + "-input", kinds=("windows", "input"))
     for side in SIDES:
         v = C.eval_input_ok(snap, pair[side], side, dev.geo)
-        if not v.ok:
-            broken += [r for r in v.reasons if r not in broken]
-    if broken:
+        found.status = worst(found.status, v.status)
+        found.reasons += [r for r in v.reasons if r not in found.reasons]
+    if not found.ok:
         files = [dev.save_text(name + "-broken-window", dev.adb.shell("dumpsys window", timeout=60)),
                  dev.save_text(name + "-broken-wmshell", dev.adb.shell(
                      "dumpsys activity service SystemUIService WMShell", timeout=60, check=False))]
-        msg = ("after this repetition and its clean-up relaunch the pair is not reachable by input (%s); evidence %s; "
-               "pair re-created" % ("; ".join(broken), ", ".join(files)))
+        what = ("is not reachable by input" if found.status == FAIL
+                else "could not be confirmed reachable by input")
+        msg = ("after this repetition and its clean-up relaunch the pair %s (%s); evidence %s; pair re-created"
+               % (what, "; ".join(found.reasons), ", ".join(files)))
         if check is None or not check.attempts:
             raise SetupError(msg)
-        # the repetition (or the relaunch that restored its tasks) left the device broken: that attempt fails,
-        # whatever its own assertions saw; the pair is then re-created so the next repetition starts clean
-        check.attempts[-1].fail(msg)
+        # A definite defect left by the repetition (or by the relaunch that restored its tasks) fails it; evidence
+        # that could not be judged makes it INCOMPLETE (never upgrades an INCOMPLETE to FAIL, never downgrades a FAIL).
+        # The pair is re-created either way so the next repetition starts from a known state.
+        if found.status == FAIL:
+            check.attempts[-1].fail(msg)
+        else:
+            check.attempts[-1].incomplete(msg)
         pair.update(setup_pair(ctx, keys, name + ".recreate"))
 
 

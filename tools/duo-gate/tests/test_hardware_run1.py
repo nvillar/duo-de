@@ -252,9 +252,6 @@ class HomeTargetsWithoutLog(unittest.TestCase):
         self.assertEqual(fake.sim.ui_dumps, 1)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 class AstraReviewF261(unittest.TestCase):
     """Astra (high) on 4e80dbe + f261c9d."""
 
@@ -349,6 +346,75 @@ class AstraReviewF261(unittest.TestCase):
                 x0, y0, x1, y1 = (int(g) for g in m.groups())
                 self.assertTrue(0 < x0 < 1350 and 0 < x1 < 1350, c)
                 self.assertTrue(220 <= y0 <= 792 and 220 <= y1 <= 792, c)
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+class AstraReview69fc(unittest.TestCase):
+    """Astra (high) on 69fc154."""
+
+    def ctx(self):
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp, True)
+        fake = FakeAdb()
+        dev = Device(fake, tmp, "t", settle=0.05, quiet=0, screens="none", live=False)
+        dev.remove_wait = 0
+        fake.sim = Sim(dev.log, {"focused_dump"})
+        fake.sim.ui_xml = sim.fixture("probe-home-gate2-uiautomator.xml")
+        return gates.Ctx(dev, Operator(interactive=False), 1, {"navigation_mode": "2"}), fake
+
+    def home_event(self, fake, event, rest=""):
+        fake.sim.emit(sim.probe(event, sim.HOME_TASK, rest, act="ProbeHomeActivity@77"))
+
+    # 1: log-backed positions are invalidated like cached ones --------------------------------------------------------
+    def test_relayout_after_the_targets_event_invalidates_it(self):
+        for event in ("onConfigurationChanged", "layout", "onDestroy", "onCreate"):
+            ctx, fake = self.ctx()
+            dev = ctx.dev
+            self.assertIn("A.probeTest", dev.home_targets())          # from the Sim's targets event, no dump
+            self.assertEqual(fake.sim.ui_dumps, 0)
+            gates.launch_from_home(ctx, "A", "probeTest", "launch")   # a probe task now has focus
+            self.home_event(fake, event, "rootOnScreen=[0,0][2784,1800]")
+            with self.assertRaises(EvidenceError, msg=event):
+                dev.home_targets()                                   # stale positions are not used
+            self.assertEqual(fake.sim.ui_dumps, 1, event)
+
+    def test_targets_logged_after_the_relayout_are_current(self):
+        ctx, fake = self.ctx()
+        self.home_event(fake, "layout", "rootOnScreen=[0,0][2784,1800]")
+        fake.sim.emit(sim.home_targets())
+        self.assertIn("B.probeTest2", ctx.dev.home_targets())
+        self.assertEqual(fake.sim.ui_dumps, 0)
+
+    # 2: clean-up merges statuses ------------------------------------------------------------------------------------
+    def broken_cleanup(self, region, earlier=None):
+        from duogate.model import Verdict
+        ctx, fake = self.ctx()
+        fake.sim.bugs.discard("focused_dump")
+        pair = gates.setup_pair(ctx, gates.PAIR_KEYS, "s")
+        check = ctx.check("X", "G", "t", required=1)
+        check.add(earlier or Verdict())
+        task = next(t for t in fake.sim.tasks if t.tid == pair["B"])
+        if region == "<empty>":
+            task.empty_region = True
+        else:
+            task.region_text = region
+        gates.restore_pair(ctx, pair, gates.PAIR_KEYS, "clean", check)
+        return check
+
+    def test_unknown_region_format_is_incomplete_not_fail(self):
+        check = self.broken_cleanup("SkRegion((1434,0,2784,1800))")
+        self.assertEqual(check.status, INCOMPLETE, check.to_json())
+        self.assertTrue(any("could not be confirmed" in r for r in check.attempts[0].reasons))
+
+    def test_definite_defect_is_fail(self):
+        self.assertEqual(self.broken_cleanup("<empty>").status, FAIL)
+
+    def test_unknown_evidence_never_downgrades_an_earlier_fail(self):
+        from duogate.model import Verdict
+        check = self.broken_cleanup("SkRegion((1434,0,2784,1800))", Verdict().fail("own assertion"))
+        self.assertEqual(check.status, FAIL)
 
 
 if __name__ == "__main__":

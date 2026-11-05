@@ -40,6 +40,7 @@ class Task:
         self.scroll = 0                 # content scrolled up by this many px
         self.no_input = False           # window dropped from input (stuck cross-task Back)
         self.empty_region = False       # normal flags and frame, but touchableRegion=<empty>
+        self.region_text = None         # raw touchableRegion text override (e.g. an unknown format)
         self.input_frame = None         # input frame left transformed (stuck predictive Back preview)
 
     @property
@@ -203,7 +204,7 @@ def inputdump(tasks: list[Task], focus: Task | None, keyguard: bool = False, tou
                    "touchableRegion=%s, ownerPid=5000, ownerUid=10190"
                    % (i + 1, t.win, t.cls, 900 + i, "NOT_VISIBLE | NOT_TOUCHABLE" if hidden else "DUPLICATE_TOUCH_TO_WALLPAPER",
                       r(t.input_frame or t.bounds),
-                      "<empty>" if t.empty_region else r(t.input_frame or t.bounds)))
+                      t.region_text or ("<empty>" if t.empty_region else r(t.input_frame or t.bounds))))
     return "\n".join(out) + "\n"
 
 

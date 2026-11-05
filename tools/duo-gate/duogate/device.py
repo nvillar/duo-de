@@ -242,8 +242,8 @@ class Device:
         return "dgs" + secrets.token_hex(4)
 
     # -- targets ------------------------------------------------------------------------------------------------------
-    # Probe HOME events after which its controls may have moved: a cached position is no longer trusted.
-    HOME_RELAYOUT = ("onCreate", "layout", "onConfigurationChanged", "onDestroy", "targets")
+    # Probe HOME events after which earlier positions are no longer trusted (a new targets event supersedes them).
+    HOME_RELAYOUT = ("onCreate", "layout", "onConfigurationChanged", "onDestroy")
 
     def home_targets(self) -> dict[str, Rect]:
         """The probe home's control rectangles: its latest targets event, else positions found earlier in this run
@@ -252,16 +252,17 @@ class Device:
         uiautomator fallback only sees the focused window, so it works right after Home but not once a probe task on
         the other panel has focus. Hence the cache, invalidated by any home relayout event."""
         e = self.log.latest(lambda e: e.event == "targets" and e.act_class == "ProbeHomeActivity")
-        cache = self._home_cache
-        if e is not None and (cache is None or e.seq >= cache[1]):
-            targets = parsers.parse_targets(e)
-            self._home_cache = (targets, e.seq)
-            return targets
-        if cache is not None:
+        candidate = self._home_cache
+        if e is not None and (candidate is None or e.seq >= candidate[1]):
+            candidate = (parsers.parse_targets(e), e.seq)
+        if candidate is not None:
+            # whatever their source, positions older than a home relayout are stale
             moved = self.log.latest(lambda x: x.act_class == "ProbeHomeActivity" and x.event in self.HOME_RELAYOUT
-                                    and x.seq > cache[1])
+                                    and x.seq > candidate[1])
             if moved is None:
-                return cache[0]
+                self._home_cache = candidate
+                return candidate[0]
+        self._home_cache = None
         targets = self.home_targets_from_ui()
         self._home_cache = (targets, len(self.log.lines) - 1)
         return targets
