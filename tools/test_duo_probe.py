@@ -97,6 +97,10 @@ class GateEvents(unittest.TestCase):
         raw = read("ProbeActivity.java")
         for needle in ('log("touch", "action="', '" rawX="', '" rawY="', 'log("targets", s)'):
             self.assertIn(needle, raw)
+        # gate-3: targets also after a scroll (no layout pass), deduplicated by logTargets
+        self.assertIn("addOnScrollChangedListener(this::logTargets)", body)
+        manifest = ET.parse(os.path.join(SRC, "AndroidManifest.xml")).getroot()
+        self.assertEqual(manifest.get(A + "versionName"), "gate-3")
 
     def test_text_event_logs_only_sentinels_and_length(self):
         raw = read("ProbeTestActivity.java")

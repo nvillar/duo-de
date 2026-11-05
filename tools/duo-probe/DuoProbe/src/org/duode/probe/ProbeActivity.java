@@ -218,6 +218,8 @@ public abstract class ProbeActivity extends Activity {
             }
             logTargets();
         });
+        // gate-3: a scroll moves the controls without a layout pass; report their new rectangles too
+        root.getViewTreeObserver().addOnScrollChangedListener(this::logTargets);
         setContentView(root);
     }
 

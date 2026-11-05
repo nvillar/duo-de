@@ -6,8 +6,8 @@ G5 IME, G6 keyguard, G7 posture/rotation). It is an AOSP module (`Android.bp`, p
 **Status:** built in an android-16.0.0_r4 tree through `dev/build.sh --with-probe`; it was
 included in the M1 gate image (tag `m1-gate-image`) and used on a Duo 1 for the M1 gates
 ([report](../../docs/m1-gate-report.md)). The `gate-2` additions for `tools/duo-gate` (touch/text sentinel and
-`targets` events, `ProbeOtherTestActivity`, `versionName=gate-2`) are not built yet; expect small compile fixes on
-the first `m DuoProbe`.
+`targets` events, `ProbeOtherTestActivity`) were built into the `m22recents` image and used for the first collector
+run. `gate-3` (`targets` also after a scroll, one `OnScrollChangedListener`) is not built yet.
 
 ## What it contains
 
@@ -36,13 +36,14 @@ read reflectively) and `windowExtensions` / `windowLayoutInfo` (display features
 Lifecycle lines also carry `display`, `rotation`, `bounds` (current window metrics), `maxBounds`, `multiWindow`,
 `orientation`, `sizeDp`, `swDp`, `dpi`, `requestedOrientation` and `keyguardLocked`.
 
-Gate-collector events (`gate-2`, used by `tools/duo-gate` as proof of real input receipt):
+Gate-collector events (`gate-2`, used by `tools/duo-gate` as proof of real input receipt; `gate-3` adds `targets` after a
+scroll, so the collector can scroll a control covered by the keyboard into view):
 
 | Event | Keys | Meaning |
 |---|---|---|
 | `touch` | `action=down\|up\|cancel x y rawX rawY pointers` | a touch the window received (raw = display coordinates); moves are not logged |
 | `text` | `editor=1\|2 len sentinels=<tokens>\|none` | the set of gate sentinels (`dgs` + 8 hex) found in an editor changed; **the editor text itself is never logged** |
-| `targets` | `<name>=[l,t][r,b] ...` | on-screen rectangles of the named controls after a layout change: home `A.toggle`, `A.probeTest`, `A.probeTest2`, `A.probeTestNew`, `A.probeLocked` (and `B.*`); test window `title`, `editor1`, `editor2`, `showIme`, `hideIme` |
+| `targets` | `<name>=[l,t][r,b] ...` | on-screen rectangles of the named controls after a layout change (gate-3: also after a scroll): home `A.toggle`, `A.probeTest`, `A.probeTest2`, `A.probeTestNew`, `A.probeLocked` (and `B.*`); test window `title`, `editor1`, `editor2`, `showIme`, `hideIme` |
 
 ```sh
 adb logcat -s DuoProbe
