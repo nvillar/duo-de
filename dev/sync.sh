@@ -183,7 +183,8 @@ write_migration_script() { # dest rel
         echo '#!/bin/bash'
         echo "# One-time DUO-DE migration of AOSP's obsolete $OLD_WEBVIEW checkout, written by"
         echo "# dev/sync.sh at $stamp. Moves the old checkout to $1 and repairs its .git link;"
-        echo "# parks the nested LineageOS checkouts in $MIGRATION_PARK meanwhile and puts them back."
+        echo "# parks the nested LineageOS checkouts in $MIGRATION_PARK meanwhile and puts them back;"
+        echo "# removes only repo's README and Android.bp links from it, restoring a tracked Android.bp."
         echo "# Deletes nothing. Holds the tree lock. If it stops, run it again: it resumes."
         echo 'set -euo pipefail'
         printf 'cd -- %q\n' "$TREE"
@@ -211,10 +212,19 @@ if [ -e "$OLD/.git" ] || [ -L "$OLD/.git" ]; then
 fi
 [ -d "$DEST" ] || fail "neither $OLD/.git nor $DEST exists; resolve by hand"
 ln -sfn -- "$GITLINK" "$DEST/.git"
+# Only repo's two linkfiles, with their exact targets. A tracked file they
+# replaced is restored; the pending restoration is recorded before unlinking,
+# so an interrupted run finishes it.
 for f in README Android.bp; do
-    if [ -L "$DEST/$f" ] && [[ "$(readlink -- "$DEST/$f")" == patches/* ]]; then
+    case "$f" in README) t=patches/README ;; *) t=patches/os_pickup.bp ;; esac
+    pending="$MARKER.restore-$f"
+    if [ -L "$DEST/$f" ] && [ "$(readlink -- "$DEST/$f")" == "$t" ]; then
+        if git -C "$DEST" ls-files --error-unmatch -- "$f" >/dev/null 2>&1; then touch -- "$pending"; fi
         rm -- "$DEST/$f"
-        if git -C "$DEST" ls-files --error-unmatch -- "$f" >/dev/null 2>&1; then git -C "$DEST" checkout -- "$f"; fi
+    fi
+    if [ -e "$pending" ]; then
+        git -C "$DEST" checkout -- "$f"
+        rm -f -- "$pending"
     fi
 done
 for p in "${NESTED[@]}"; do

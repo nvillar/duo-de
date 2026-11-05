@@ -364,13 +364,15 @@ for ((n = 1; n < 200; n++)); do
         || [ "$(git -C "$OW/patches" diff --cached --name-only)" != README ] \
         || [ "$(git -C "$OW/prebuilt/arm64" diff --cached --name-only)" != webview.apk ] \
         || ! D=$(ls -d "$S/.duo-dev/obsolete/external-chromium-webview."* 2>/dev/null) \
-        || [ "$(git -C "$D" diff --cached --name-only 2>&1)" != prebuilt/METADATA ] \
+        || [ "$(git -C "$D" status --porcelain=v1 2>&1)" != "M  prebuilt/METADATA" ] \
+        || [ -L "$D/Android.bp" ] || [ "$(cat "$D/Android.bp" 2>&1)" != 'android_app_import { name: "webview" }' ] \
+        || [ -e "$D/README" ] || [ -L "$D/README" ] || compgen -G "$MARKER.restore-*" >/dev/null \
         || [ -e "$MARKER" ] || [ -e "$S/.duo-dev/webview-nested" ]; then
-        echo "FAIL resuming after an interruption before command $n"; cat "$T/int.err"; bad=1; break
+        echo "FAIL resuming after an interruption before command $n"; cat "$T/int.err"; [ -z "$D" ] || { git -C "$D" status --porcelain=v1; ls -la "$D"; }; bad=1; break
     fi
 done
 [ "$bad" -eq 0 ] && [ "$points" -ge 15 ] && [ "$done_early" -le 1 ] \
-    && echo "PASS interrupted before each of its $points commands: sync refused while unfinished ($done_early stop after completion), staged indexes kept, rerun completes" \
+    && echo "PASS interrupted before each of its $points commands: sync refused while unfinished ($done_early stop after completion), staged indexes kept, rerun completes with the archived work tree intact" \
     || { [ "$bad" -ne 0 ] || echo "FAIL only $points interruption points"; }
 # A parked checkout without the marker (e.g. moved by hand) also stops sync.
 mk_webview_tree; mkdir -p "$S/.duo-dev/webview-nested"; mv "$OW/patches" "$S/.duo-dev/webview-nested/patches"
@@ -379,6 +381,15 @@ if bash "$H/dev/sync.sh" "$S" >/dev/null 2>"$T/sync.err"; then echo "FAIL sync w
 elif grep -q "parked: .duo-dev/webview-nested/patches" "$T/sync.err" && [ ! -s "$REPO_LOG" ] && [ "$(snap)" == "$before" ]; then
     echo "PASS a parked checkout without the marker also stops sync"
 else echo "FAIL parked checkout"; cat "$T/sync.err"; fi
+# Only repo's two linkfiles (exact targets) are removed from the old checkout;
+# a user's symlink into patches/ is local work: reported and kept.
+mk_webview_tree; rm "$OW/README"; ln -s patches/my-notes "$OW/README"; ln -s patches/x "$OW/notes"
+bash "$H/dev/sync.sh" "$S" >/dev/null 2>"$T/sync.err" && echo "FAIL sync went ahead"
+if grep -qF "'?? README'" "$T/sync.err" && grep -qF "'?? notes'" "$T/sync.err" && run_steps >/dev/null 2>&1 && bash "$H/dev/sync.sh" "$S" >/dev/null 2>&1; then
+    D=$(ls -d "$S/.duo-dev/obsolete/external-chromium-webview."* 2>/dev/null || true)
+    [ "$(readlink "$D/README" 2>&1)" == patches/my-notes ] && [ "$(readlink "$D/notes" 2>&1)" == patches/x ] \
+        && echo "PASS user symlinks into patches/ are reported and kept, not removed" || { echo "FAIL user symlinks"; ls -la "$D"; }
+else echo "FAIL user symlinks"; cat "$T/sync.err"; fi
 # The migration, then a (mocked) repo sync: everything is kept and usable.
 mk_webview_tree typechange
 g - "" commit -q --allow-empty -m local; OLDHEAD=$(g - "" rev-parse HEAD)
