@@ -1,0 +1,87 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Nicolas Villar <15879262+nvillar@users.noreply.github.com>
+Date: Thu, 5 Nov 2026 11:43:59 -0800
+Subject: [PATCH] Duo: Back at the root of a panel task minimizes it instead of
+ doing nothing
+
+Back at the root of an app started from home (ActivityClientController.onBackPressed with a MAIN/LAUNCHER base intent
+launched from home) or an explicit Activity.moveTaskToBack moves the root task to the back of its task display area
+(Task.moveTaskToBack -> moveToBack -> positionChildAt(POSITION_BOTTOM)). On a phone the task then sits behind home and
+stops. A panel's task area (Panel0Tasks / Panel1Tasks) has no home: with one task in the panel nothing changed, the task
+stayed on top of its panel, visible and resumed, and Back did nothing at all (gate G4.back: "no lifecycle change").
+
+It also stranded predictive Back (ledger F22). A committed cross-task Back preview waits for the closing transition of
+that Back (BackNavigationController.onTransactionReady sets mPrepareCloseTransition, and the composed animation is only
+cleared when that transition finishes). The TO_BACK transition of a no-op moveTaskToBack has no targets, so it never
+became the closing transition: Shell kept holding the prepare transition with mCloseTransitionRequested set, the
+animation stayed composed, the closing task kept its 0.8 post-commit transform ([135,180][1215,1620] on panel 0) and
+the opening target stayed paused for touch (WindowState.canReceiveTouchInput -> shouldPauseTouch), until the tasks
+were removed; every later Back returned "Previous animation hasn't finish".
+
+After moveToBack, the root task of the moved task (not the task moveTaskToBack was called on: an organizer-created root
+leaves itself in place and reparents the task out of it), if it is in a panel task area, is hidden with the policy's
+own reason, FLAG_FORCE_HIDDEN_FOR_DUO_PANEL, collected into the transition being collected (the TO_BACK, or the OPEN
+it joins).
+That is what Home does for a whole panel: the panel shows home (or its next task), the task stops, and the Back
+transition now carries the closing task. It is shown again when it is moved to front (relaunch, Recents, a focus move:
+restoreHiddenByPolicy, fw 0014). Other task display areas (the spanned default area) keep the platform behaviour.
+
+Not built or run on a device yet. Verified by git am -3 after the series and a javac type check of the changed classes
+against the gate build's framework and services jars.
+
+Co-authored-by: Copilot App <223556219+Copilot@users.noreply.github.com>
+---
+ .../wm/DuoDisplayAreaPolicyProvider.java      | 22 +++++++++++++++++++
+ .../core/java/com/android/server/wm/Task.java |  3 +++
+ 2 files changed, 25 insertions(+)
+
+diff --git a/services/core/java/com/android/server/wm/DuoDisplayAreaPolicyProvider.java b/services/core/java/com/android/server/wm/DuoDisplayAreaPolicyProvider.java
+index 73a4d40fb..db98daca4 100644
+--- a/services/core/java/com/android/server/wm/DuoDisplayAreaPolicyProvider.java
++++ b/services/core/java/com/android/server/wm/DuoDisplayAreaPolicyProvider.java
+@@ -213,6 +213,28 @@ public class DuoDisplayAreaPolicyProvider implements DisplayAreaPolicy.Provider
+         return restored;
+     }
+ 
++    /**
++     * Back at the root of an app started from home (ActivityClientController.onBackPressed) or an explicit
++     * moveTaskToBack moves the root task to the back of its task display area; on a phone it then sits behind home.
++     * A panel's task area has no home, so the task stayed on top of its panel, visible and resumed: Back did nothing,
++     * and a predictive Back preview committed on it never got its closing transition and stayed composed (the other
++     * panel's task paused for touch, ledger F22). Hides the task with the policy's own reason, as Home does for a
++     * whole panel, so that panel shows home (or its next task) and the task stops; it is shown again when it is moved
++     * to front (relaunch, Recents: {@link #restoreHiddenByPolicy}). A no-op outside a panel task area.
++     */
++    static void minimizeMovedToBack(Task rootTask) {
++        if (!sActive || rootTask == null || !rootTask.isRootTask()) return;
++        final TaskDisplayArea tda = rootTask.getDisplayArea();
++        if (tda == null || !(tda.getRootDisplayArea() instanceof PanelGroup)) return;
++        final TransitionController transitions = rootTask.mTransitionController;
++        if (transitions.isCollecting()) {
++            transitions.collect(rootTask);
++        }
++        if (rootTask.setForceHidden(Task.FLAG_FORCE_HIDDEN_FOR_DUO_PANEL, true /* set */)) {
++            Slog.i(TAG, "Back: minimized " + rootTask + " on " + tda.getRootDisplayArea().getName());
++        }
++    }
++
+     /**
+      * The panel a launch should go to, from where the user tapped. A launcher passes the on-screen rectangle of the
+      * tapped icon as the intent's source bounds; the panel containing it gets the new task, so an icon on the left
+diff --git a/services/core/java/com/android/server/wm/Task.java b/services/core/java/com/android/server/wm/Task.java
+index 8fbcc924f..793933175 100644
+--- a/services/core/java/com/android/server/wm/Task.java
++++ b/services/core/java/com/android/server/wm/Task.java
+@@ -6043,6 +6043,9 @@ class Task extends TaskFragment {
+         }
+         try {
+             moveToBack("moveTaskToBackInner", task);
++            // Duo two panel policy: a panel's task area has no home to go behind; hide the task as Home would. The root
++            // of the moved task: an organizer root leaves itself in place and reparents the task out of it.
++            DuoDisplayAreaPolicyProvider.minimizeMovedToBack(task.getRootTask());
+ 
+             if (inPinnedWindowingMode()) {
+                 mTaskSupervisor.removeRootTask(this);
+-- 
+2.34.1
+

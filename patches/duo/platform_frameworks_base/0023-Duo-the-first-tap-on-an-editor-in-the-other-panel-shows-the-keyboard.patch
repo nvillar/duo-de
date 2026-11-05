@@ -1,0 +1,176 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Nicolas Villar <15879262+nvillar@users.noreply.github.com>
+Date: Thu, 5 Nov 2026 11:44:03 -0800
+Subject: [PATCH] Duo: the first tap on an editor in the other panel shows the
+ keyboard
+
+A tap on an editor in a window that does not have window focus, the app on the other panel, is delivered (down and up)
+before the focus change it causes reaches the app. The window manager moves focus on the down
+(handlePointerDownOutsideFocus -> setFocusedTask), but the focus event arrives about 90 ms later (gate G5: up at
++10 ms, onWindowFocusChanged at +92 ms). On the up the editor takes view focus and calls showSoftInput while its window
+is not the input method manager's current root: the view is not served and the request is dropped
+(InputMethodManager.showSoftInput, "Ignoring showSoftInput() as view=... is not served"). The window then gains focus
+with a focused editor, which shows nothing by itself (SOFT_INPUT_STATE_UNSPECIFIED without forward navigation;
+ImeVisibilityStateComputer only restores the keyboard for a window that had it before). With refactor_insets_controller
+the keyboard follows the requested visibility of its control target, so a keyboard up for the other panel went away
+with its control (gate G5.ime.B.fromA: shown on the new panel, then hidden within 70 ms) and a hidden one stayed hidden
+(G5.ime.A.editor1 rep 1). The user had to tap a second time (ledger F10). The reverse direction passed only because the
+target window had shown the keyboard before (restore).
+
+While the two panel policy is active (sys.duode.panels.active=1), a show request that is not served because the
+requesting view is the focused view of a window without window focus, on the default display, is remembered (weakly,
+with its flags and time); a later hide request from the process drops it.
+When the next window of this process gains focus and has started input, the request is replayed if that window's
+focused view is the requesting view, it still has focus, and the request is at most 1 s old; it is dropped otherwise.
+The replay is an ordinary showSoftInput from the now served view. Nothing changes with the policy off, or for a
+request from a focused window.
+
+Not built or run on a device yet. Verified by git am -3 after the series and a javac type check against the gate
+build's framework jar.
+
+Co-authored-by: Copilot App <223556219+Copilot@users.noreply.github.com>
+---
+ .../view/inputmethod/InputMethodManager.java  | 85 +++++++++++++++++++
+ 1 file changed, 85 insertions(+)
+
+diff --git a/core/java/android/view/inputmethod/InputMethodManager.java b/core/java/android/view/inputmethod/InputMethodManager.java
+index f6c611402..854eba198 100644
+--- a/core/java/android/view/inputmethod/InputMethodManager.java
++++ b/core/java/android/view/inputmethod/InputMethodManager.java
+@@ -78,6 +78,7 @@ import android.os.Looper;
+ import android.os.Message;
+ import android.os.Process;
+ import android.os.ResultReceiver;
++import android.os.SystemClock;
+ import android.os.SystemProperties;
+ import android.os.Trace;
+ import android.os.UserHandle;
+@@ -511,6 +512,24 @@ public final class InputMethodManager {
+     @GuardedBy("mH")
+     private boolean mRestartOnNextWindowFocus = true;
+ 
++    /**
++     * Duo two panel policy: a {@link #showSoftInput} that was not served because the requesting view's window had not
++     * received window focus yet, replayed once when that window gains focus (see
++     * {@link #recordDuoPendingShowLocked}).
++     */
++    @GuardedBy("mH")
++    @Nullable
++    private WeakReference<View> mDuoPendingShowView;
++    @GuardedBy("mH")
++    private int mDuoPendingShowFlags;
++    @GuardedBy("mH")
++    private long mDuoPendingShowUptimeMs;
++
++    /** Runtime state published by the window manager: 1 while the two panel window policy is active. */
++    private static final String DUO_PANELS_ACTIVE_PROP = "sys.duode.panels.active";
++    /** A remembered show request older than this (the window focus did not follow the tap) is dropped. */
++    private static final long DUO_PENDING_SHOW_TIMEOUT_MS = 1000;
++
+     /**
+      * As reported by IME through InputConnection.
+      */
+@@ -868,6 +887,25 @@ public final class InputMethodManager {
+         @Override
+         public void onPostWindowGainedFocus(View viewForWindowFocus,
+                 @NonNull WindowManager.LayoutParams windowAttribute) {
++            onPostWindowGainedFocusInner(viewForWindowFocus, windowAttribute);
++            // Duo two panel policy: replay a keyboard request that the tap which focused this window made before the
++            // window focus arrived (see recordDuoPendingShowLocked).
++            final View pendingShowView;
++            final int pendingShowFlags;
++            synchronized (mH) {
++                pendingShowView = takeDuoPendingShowLocked(viewForWindowFocus);
++                pendingShowFlags = mDuoPendingShowFlags;
++            }
++            if (pendingShowView != null) {
++                Log.i(TAG, "Duo: replaying showSoftInput() requested before window focus, view="
++                        + pendingShowView);
++                showSoftInput(pendingShowView, pendingShowFlags, null /* resultReceiver */,
++                        SoftInputShowHideReason.SHOW_SOFT_INPUT);
++            }
++        }
++
++        private void onPostWindowGainedFocusInner(View viewForWindowFocus,
++                @NonNull WindowManager.LayoutParams windowAttribute) {
+             boolean forceFocus = false;
+             synchronized (mH) {
+                 // Update mNextServedView when focusedView changed.
+@@ -1122,6 +1160,48 @@ public final class InputMethodManager {
+                 || (servedView != null && servedView.checkInputConnectionProxy(view)));
+     }
+ 
++    /**
++     * Duo two panel policy. A tap on an editor in a window that does not have window focus (the app on the other
++     * panel) is delivered, down and up, before the focus change it causes reaches the app: the window manager moves
++     * focus on the down, but the focus event arrives tens of milliseconds later. The editor takes view focus and asks
++     * for the keyboard while its window is not the current root, so the request is not served and was dropped; the
++     * window then gained focus with a focused editor, which shows nothing by itself (soft input state unspecified), and
++     * a keyboard shown for the previous window went away with its control. The user had to tap a second time. Remember
++     * such a request (only for the focused view of a window without window focus on the default display, the one with
++     * the panels, and only while the two panel policy is active) so {@link DelegateImpl#onPostWindowGainedFocus} can
++     * replay it once that window gains focus. A hide request in between drops it. The window can still be the current
++     * root (kept after it lost focus until the client is deactivated), so that is not a reason to ignore the request.
++     */
++    @GuardedBy("mH")
++    private void recordDuoPendingShowLocked(View view, @ShowFlags int flags) {
++        final ViewRootImpl viewRootImpl = view.getViewRootImpl();
++        if (viewRootImpl == null || viewRootImpl.getDisplayId() != Display.DEFAULT_DISPLAY
++                || view.hasWindowFocus() || !view.isFocused()
++                || !SystemProperties.getBoolean(DUO_PANELS_ACTIVE_PROP, false)) {
++            return;
++        }
++        mDuoPendingShowView = new WeakReference<>(view);
++        mDuoPendingShowFlags = flags;
++        mDuoPendingShowUptimeMs = SystemClock.uptimeMillis();
++    }
++
++    /**
++     * Returns the remembered show request if it was made by {@code focusedView}, the focused view of the window that
++     * has just gained focus, and is recent; clears it in any case (one replay, only for the next window focus gain).
++     */
++    @GuardedBy("mH")
++    @Nullable
++    private View takeDuoPendingShowLocked(View focusedView) {
++        final View view = mDuoPendingShowView != null ? mDuoPendingShowView.get() : null;
++        mDuoPendingShowView = null;
++        if (view == null || view != focusedView || !view.isFocused()
++                || view.getViewRootImpl() != mCurRootView
++                || SystemClock.uptimeMillis() - mDuoPendingShowUptimeMs > DUO_PENDING_SHOW_TIMEOUT_MS) {
++            return null;
++        }
++        return view;
++    }
++
+     class H extends Handler {
+         H(Looper looper) {
+             super(looper, null, true);
+@@ -2453,6 +2533,7 @@ public final class InputMethodManager {
+         checkFocus();
+         synchronized (mH) {
+             if (!hasServedByInputMethodLocked(view)) {
++                recordDuoPendingShowLocked(view, flags);
+                 ImeTracker.forLogging().onFailed(statsToken, ImeTracker.PHASE_CLIENT_VIEW_SERVED);
+                 ImeTracker.forLatency().onShowFailed(statsToken,
+                         ImeTracker.PHASE_CLIENT_VIEW_SERVED, ActivityThread::currentApplication);
+@@ -2645,6 +2726,8 @@ public final class InputMethodManager {
+                 this, null /* icProto */);
+         checkFocus();
+         synchronized (mH) {
++            // Duo two panel policy: a later hide request wins over a show waiting for window focus.
++            mDuoPendingShowView = null;
+             // Get served view again in case it changed between the synchronized blocks.
+             final View servedView = getServedViewLocked();
+             if (servedView == null || servedView.getWindowToken() != windowToken) {
+@@ -2705,6 +2788,8 @@ public final class InputMethodManager {
+         checkFocus();
+         final boolean isFocusedAndWindowFocused = view.hasWindowFocus() && view.isFocused();
+         synchronized (mH) {
++            // Duo two panel policy: a later hide request wins over a show waiting for window focus.
++            mDuoPendingShowView = null;
+             final boolean hasServedByInputMethod = hasServedByInputMethodLocked(view);
+             if (!isFocusedAndWindowFocused && !hasServedByInputMethod) {
+                 // Fail early if the view is not focused and not served
+-- 
+2.34.1
+

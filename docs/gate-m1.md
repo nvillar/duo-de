@@ -109,7 +109,8 @@ gate-2 adds `touch` (raw coordinates of each touch received), `text` (gate senti
 text) and `targets` (on-screen rectangles of the probe's controls).
 `DuoDisplayAreaPolicy` logs `Home: minimizing PanelN (k tasks)`, `Restored minimized Task{...}`, `IME bounds ...`.
 A task hidden by Home shows `mForceHiddenFlags=8` in `activities.txt` (8 = the policy's own flag; 2 = Shell's task
-organizer; 1 = PiP). Touch and fold outcomes must be observed on the device; screenshots alone do not prove them.
+organizer; 1 = PiP). From frameworks_base 0021, Back at the root of a panel task (logged `Back: minimized`) sets the
+same flag on that task. Touch and fold outcomes must be observed on the device; screenshots alone do not prove them.
 
 ## 3. Gates
 

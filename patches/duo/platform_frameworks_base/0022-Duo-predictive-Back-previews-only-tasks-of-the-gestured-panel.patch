@@ -1,0 +1,98 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Nicolas Villar <15879262+nvillar@users.noreply.github.com>
+Date: Thu, 5 Nov 2026 11:44:01 -0800
+Subject: [PATCH] Duo: predictive Back previews only tasks of the gestured
+ panel
+
+BackNavigationController.startBackNavigation picks the task Back would reveal (back-to-home / cross-task check) by
+walking the whole window hierarchy below the current task. The focused panel's group is on top, so from a panel task
+that walk reached the other panel's task (or, from the lower panel, the spanned home). Back from panel 0 with panel 0
+focused (focus moves there on the touch down of the gesture) prepared a TYPE_CROSS_TASK animation that closed the
+panel 0 task and "opened" the already visible panel 1 task: Shell scaled and moved the other panel's task with the
+gesture, and WindowState.canReceiveTouchInput paused touch on it for as long as the animation was composed (input
+window NO_INPUT_CHANNEL | NOT_TOUCHABLE, taps fell through to the spanned home behind it; ledger F22). Neither of those
+tasks is what Back shows: Back finishes or minimizes the panel task and the panel then shows its next task or home.
+
+For a task in a panel task area the candidates are now only the tasks of that panel that are not force hidden (a task
+minimized by Home or by Back stays hidden when the current task goes away). With another task in the panel the cross
+task preview is the platform's, inside the panel. With none, no preview is prepared (TYPE_CALLBACK): Back is still
+delivered to the app on commit, and a cancelled gesture prepares no transition and changes nothing. In a single panel
+posture (both panel groups cover the same screen) and in the spanned default task area (home, recents and spanned
+apps) the platform search applies. The search moves to DuoDisplayAreaPolicyProvider.previousTaskForBack, which returns
+the platform result when the policy is not active.
+
+Not built or run on a device yet. Verified by git am -3 after the series and a javac type check of the changed classes
+against the gate build's framework and services jars.
+
+Co-authored-by: Copilot App <223556219+Copilot@users.noreply.github.com>
+---
+ .../server/wm/BackNavigationController.java   |  5 ++--
+ .../wm/DuoDisplayAreaPolicyProvider.java      | 24 +++++++++++++++++++
+ 2 files changed, 27 insertions(+), 2 deletions(-)
+
+diff --git a/services/core/java/com/android/server/wm/BackNavigationController.java b/services/core/java/com/android/server/wm/BackNavigationController.java
+index b9be7b960..a0b517bbc 100644
+--- a/services/core/java/com/android/server/wm/BackNavigationController.java
++++ b/services/core/java/com/android/server/wm/BackNavigationController.java
+@@ -389,13 +389,14 @@ class BackNavigationController {
+                 backType = BackNavigationInfo.TYPE_CALLBACK;
+             } else {
+                 // Check back-to-home or cross-task
+-                prevTask = currentTask.mRootWindowContainer.getTask(t -> {
++                // Duo two panel policy: a panel task only previews the tasks of its own panel.
++                prevTask = DuoDisplayAreaPolicyProvider.previousTaskForBack(currentTask, t -> {
+                     if (t.showToCurrentUser() && !t.mChildren.isEmpty()) {
+                         final ActivityRecord ar = t.getTopNonFinishingActivity();
+                         return ar != null && ar.showToCurrentUser();
+                     }
+                     return false;
+-                }, currentTask, false /*includeBoundary*/, true /*traverseTopToBottom*/);
++                });
+                 final ActivityRecord tmpPre = prevTask != null
+                         ? prevTask.getTopNonFinishingActivity() : null;
+                 if (tmpPre != null) {
+diff --git a/services/core/java/com/android/server/wm/DuoDisplayAreaPolicyProvider.java b/services/core/java/com/android/server/wm/DuoDisplayAreaPolicyProvider.java
+index db98daca4..7c9d85bd8 100644
+--- a/services/core/java/com/android/server/wm/DuoDisplayAreaPolicyProvider.java
++++ b/services/core/java/com/android/server/wm/DuoDisplayAreaPolicyProvider.java
+@@ -39,6 +39,7 @@ import com.android.server.wm.DisplayAreaPolicyBuilder.HierarchyBuilder;
+ 
+ import java.util.ArrayList;
+ import java.util.function.Consumer;
++import java.util.function.Predicate;
+ import java.util.List;
+ 
+ /**
+@@ -235,6 +236,29 @@ public class DuoDisplayAreaPolicyProvider implements DisplayAreaPolicy.Provider
+         }
+     }
+ 
++    /**
++     * The task predictive Back would reveal below {@code current} (BackNavigationController, back-to-home or cross-task
++     * check). The platform walks the whole hierarchy, which from a panel task reaches the other panel's task (the
++     * focused panel's group is on top) or the spanned home: the preview then animated and paused for touch the task on
++     * the other panel, and Back is not going to show either of them. For a panel task only the tasks of its own panel
++     * are candidates, and only ones that are not force hidden (minimized by the policy, or hidden by an organizer: they
++     * stay hidden when the current task goes away). No candidate means no preview: Back is still delivered to the app.
++     * In a single panel posture both panel groups cover the same screen and the platform search applies.
++     */
++    @Nullable
++    static Task previousTaskForBack(Task current, Predicate<Task> candidate) {
++        final TaskDisplayArea tda = sActive ? current.getDisplayArea() : null;
++        if (tda == null || !(tda.getRootDisplayArea() instanceof PanelGroup) || tda.getBounds().isEmpty()
++                || tda.getBounds().equals(tda.mDisplayContent.getBounds())) {
++            return current.mRootWindowContainer.getTask(candidate, current, false /* includeBoundary */,
++                    true /* traverseTopToBottom */);
++        }
++        return tda.getTask(t -> {
++            final Task root = t.getRootTask();
++            return (root == null || !root.isForceHidden()) && candidate.test(t);
++        }, current, false /* includeBoundary */, true /* traverseTopToBottom */);
++    }
++
+     /**
+      * The panel a launch should go to, from where the user tapped. A launcher passes the on-screen rectangle of the
+      * tapped icon as the intent's source bounds; the panel containing it gets the new task, so an icon on the left
+-- 
+2.34.1
+
