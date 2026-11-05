@@ -35,6 +35,13 @@ The correlation is explicit, by window and focus report, not by timing:
   differ), where the root's show requests are made, so a request made before the hide runs is always seen. Logged
   as "Duo: ignoring the window focus gain hide ..." or "Duo: dropping the window focus gain hide for report N ..."
   (tag InputMethodManager); ImeTracker records them cancelled.
+The start input sequence number must identify exactly one request. IInputMethodManagerGlobalInvoker incremented a
+process wide counter for the request but returned the shared counter after the IPC, so a call from another display's
+InputMethodManager in between made a caller record its report under the other request's number. The counter is now
+an AtomicInteger; each call allocates its number into a local, sends it and returns exactly that number. The only
+users of the return value are startInputInner (mLastPendingStartSeqId, ReportInputConnectionOpenedRunner, matched
+against onStartInputResult's echo, which is also exact now) and the focus report record above; no caller relied on
+reading a later number.
 With the policy off the server never uses the new method and nothing changes. A hide that arrives before the show, or
 a window without a show request after its focus report, is applied as before.
 
@@ -43,12 +50,56 @@ IInputMethodClient stub) against the gate build's framework and services jars.
 
 Co-authored-by: Copilot App <223556219+Copilot@users.noreply.github.com>
 ---
+ .../IInputMethodManagerGlobalInvoker.java     |  14 +-
  .../view/inputmethod/InputMethodManager.java  | 153 +++++++++++++++++-
  .../inputmethod/IInputMethodClient.aidl       |   7 +
  .../IInputMethodClientInvoker.java            |  27 ++++
  .../InputMethodManagerService.java            |  35 +++-
- 4 files changed, 212 insertions(+), 10 deletions(-)
+ 5 files changed, 222 insertions(+), 14 deletions(-)
 
+diff --git a/core/java/android/view/inputmethod/IInputMethodManagerGlobalInvoker.java b/core/java/android/view/inputmethod/IInputMethodManagerGlobalInvoker.java
+index fe5afe437..86b1ed490 100644
+--- a/core/java/android/view/inputmethod/IInputMethodManagerGlobalInvoker.java
++++ b/core/java/android/view/inputmethod/IInputMethodManagerGlobalInvoker.java
+@@ -75,7 +75,8 @@ final class IInputMethodManagerGlobalInvoker {
+ 
+     @Nullable
+     private static volatile IImeTracker sTrackerServiceCache = null;
+-    private static int sCurStartInputSeq = 0;
++    private static final java.util.concurrent.atomic.AtomicInteger sCurStartInputSeq =
++            new java.util.concurrent.atomic.AtomicInteger();
+ 
+     /**
+      * @return {@code true} if {@link IInputMethodManager} is available.
+@@ -306,20 +307,25 @@ final class IInputMethodManagerGlobalInvoker {
+         if (service == null) {
+             return -1;
+         }
++        // Duo two panel policy: allocate this request's sequence number once and return exactly that number. The
++        // counter is process wide (one InputMethodManager per display): returning the shared counter after the IPC
++        // could return a number another call allocated in between, and the window focus gain hide that the system
++        // echoes with this request's number would not be matched to its report.
++        final int startInputSeq = advanceAngGetStartInputSequenceNumber();
+         try {
+             service.startInputOrWindowGainedFocus(startInputReason, client, windowToken,
+                     startInputFlags, softInputMode, windowFlags, editorInfo, remoteInputConnection,
+                     remoteAccessibilityInputConnection, remoteComputerControlInputConnection,
+                     unverifiedTargetSdkVersion, userId, imeBackCallbackReceiver,
+-                    imeRequestedVisible, advanceAngGetStartInputSequenceNumber());
++                    imeRequestedVisible, startInputSeq);
+         } catch (RemoteException e) {
+             throw e.rethrowFromSystemServer();
+         }
+-        return sCurStartInputSeq;
++        return startInputSeq;
+     }
+ 
+     private static int advanceAngGetStartInputSequenceNumber() {
+-        return ++sCurStartInputSeq;
++        return sCurStartInputSeq.incrementAndGet();
+     }
+ 
+ 
 diff --git a/core/java/android/view/inputmethod/InputMethodManager.java b/core/java/android/view/inputmethod/InputMethodManager.java
 index f17aaef28..7b66a5d32 100644
 --- a/core/java/android/view/inputmethod/InputMethodManager.java
