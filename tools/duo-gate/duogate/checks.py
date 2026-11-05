@@ -390,6 +390,22 @@ def eval_ime(snap, side: str, editor: int, target_task: int, other_task: int, *,
     return v
 
 
+def eval_rotation(snap, requested: int, settled: bool) -> Verdict:
+    """The action-scoped rotation evidence arrived (settled) and the display really is at the requested rotation
+    (user_rotation value 0..3), read from the display's own configuration. Otherwise nothing can be judged."""
+    v = Verdict()
+    if not settled:
+        v.incomplete("no rotation=%d event from the probe tasks within the settle time" % requested)
+    wd = _snap(lambda: snap.wdisplays, v, "window displays")
+    if wd is not None:
+        if wd.rotation is None:
+            v.incomplete("display rotation not found in the window displays dump")
+        elif wd.rotation != requested * 90:
+            v.incomplete("display at rotation %d, requested %d: the rotation did not take effect"
+                         % (wd.rotation, requested * 90))
+    return v
+
+
 def eval_ime_rotated(events: list[ProbeEvent], snap, target_task: int, other_task: int) -> Verdict:
     """After a rotation with the keyboard up: the keyboard is confined to the panel area holding the target task (the
     rotated panel bounds are taken from the same dump), and both tasks kept their panel areas."""
@@ -421,8 +437,10 @@ def eval_ime_rotated(events: list[ProbeEvent], snap, target_task: int, other_tas
 # keyguard
 
 def eval_locked(events: list[ProbeEvent], snap, ordinary_tasks, showwhenlocked_task: int | None = None) -> Verdict:
-    """While locked: keyguard showing, no ordinary task window on screen, touchable or focused, and no input or
-    resume reached an ordinary task (attempted interaction included)."""
+    """While locked: keyguard showing; every ordinary task window explicitly reported off screen and invisible (an
+    unparsed visibility is never taken as hidden); none touchable in the input dispatcher; neither the WM nor the
+    input dispatcher (checked independently) focuses an ordinary task; and no input or resume reached an ordinary
+    task (attempted interaction included)."""
     v = Verdict()
     acts = _snap(lambda: snap.activities, v, "activities")
     if acts is not None:
@@ -434,20 +452,45 @@ def eval_locked(events: list[ProbeEvent], snap, ordinary_tasks, showwhenlocked_t
     inp = _snap(lambda: snap.input, v, "input")
     wd = _snap(lambda: snap.wdisplays, v, "window displays")
     if ww is not None:
+        for tid in ordinary_tasks:
+            if not any(w.task_id == tid for w in ww.values()):
+                v.incomplete("no window attributable to ordinary task %d in the window dump" % tid)
         for w in ww.values():
-            if w.task_id in ordinary_tasks:
-                if w.on_screen or w.visible:
-                    v.fail("ordinary task %d window %s visible while locked (isOnScreen=%s isVisible=%s)"
-                           % (w.task_id, w.title, w.on_screen, w.visible))
-                if inp is not None:
-                    for iw in inp.windows:
-                        if iw.hash == w.hash and iw.touchable:
-                            v.fail("ordinary task %d window %s touchable while locked (%s)"
-                                   % (w.task_id, w.title, "|".join(sorted(iw.flags))))
-        if wd is not None and wd.current_focus is not None:
-            fw = ww.get(wd.current_focus.hash)
-            if fw is not None and fw.task_id in ordinary_tasks:
-                v.fail("ordinary task %d has focus while locked" % fw.task_id)
+            if w.task_id not in ordinary_tasks:
+                continue
+            if w.on_screen or w.visible:
+                v.fail("ordinary task %d window %s visible while locked (isOnScreen=%s isVisible=%s)"
+                       % (w.task_id, w.title, w.on_screen, w.visible))
+            elif w.on_screen is None or w.visible is None:
+                v.incomplete("visibility of ordinary task %d window %s not reported (isOnScreen=%s isVisible=%s)"
+                             % (w.task_id, w.title, w.on_screen, w.visible))
+            if inp is not None:
+                for iw in inp.windows:
+                    if iw.hash == w.hash and iw.touchable:
+                        v.fail("ordinary task %d window %s touchable while locked (%s)"
+                               % (w.task_id, w.title, "|".join(sorted(iw.flags))))
+        if wd is not None:
+            if wd.current_focus is None:
+                v.incomplete("WM reports no focused window while locked")
+            else:
+                fw = ww.get(wd.current_focus.hash)
+                if fw is None:
+                    v.incomplete("WM focus %s not in the window dump" % wd.current_focus.hash)
+                elif fw.task_id in ordinary_tasks:
+                    v.fail("ordinary task %d has WM focus while locked" % fw.task_id)
+        if inp is not None:
+            if inp.focused_app_task in ordinary_tasks:
+                v.fail("input dispatcher focused application is ordinary task %d while locked" % inp.focused_app_task)
+            if inp.focused_window_hash is None:
+                v.incomplete("input dispatcher focused window missing or unresolvable (%r)" % inp.focused_window)
+            else:
+                iw = ww.get(inp.focused_window_hash)
+                if iw is None:
+                    v.incomplete("input focus %r not in the window dump" % inp.focused_window)
+                elif iw.task_id in ordinary_tasks:
+                    v.fail("ordinary task %d has input focus while locked" % iw.task_id)
+                if wd is not None and wd.current_focus is not None and wd.current_focus.hash != inp.focused_window_hash:
+                    v.note("WM focus %s and input focus %r differ" % (wd.current_focus.hash, inp.focused_window))
     for e in _ev(events, name=("onResume", "touch", "text", "editorFocus")):
         if e.task in ordinary_tasks:
             v.fail("ordinary task %d got %s while locked" % (e.task, e.event))

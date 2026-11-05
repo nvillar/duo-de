@@ -270,6 +270,7 @@ class DisplayFocus:
     ime_layering_target: WindowRef | None
     ime_input_target: WindowRef | None
     ime_control_target: WindowRef | None
+    rotation: int | None = None      # degrees, from the display's own configuration (mDisplayRotation)
 
 
 def parse_window_displays(text: str, display_id: int = 0) -> DisplayFocus:
@@ -291,9 +292,10 @@ def parse_window_displays(text: str, display_id: int = 0) -> DisplayFocus:
     focus = field_value("mCurrentFocus")
     app = field_value("mFocusedApp")
     m = re.search(r"ActivityRecord\{\S+ u\d+ (\S+) t(-?\d+)\}", app)
+    r = re.search(r"mDisplayRotation=ROTATION_(\d+)", block)
     return DisplayFocus(_winref(focus), int(m.group(2)) if m else None, m.group(1) if m else None,
                         _winref(field_value("mImeLayeringTarget")), _winref(field_value("mImeInputTarget")),
-                        _winref(field_value("mImeControlTarget")))
+                        _winref(field_value("mImeControlTarget")), int(r.group(1)) if r else None)
 
 
 @dataclass

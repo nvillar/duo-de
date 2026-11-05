@@ -240,11 +240,15 @@ class Device:
         return self.home_targets_from_ui()
 
     def home_targets_from_ui(self) -> dict[str, Rect]:
-        """Fallback when the probe home's targets event is no longer in the log buffer: needs the home focused."""
+        """Fallback when the probe home's targets event is no longer in the log buffer: needs the home focused.
+        The raw hierarchy (which may hold unrelated on-screen text) is never stored: only the allowlisted probe
+        control names and bounds are, and the device copy is deleted."""
         remote = "/data/local/tmp/duogate-ui.xml"
-        self.adb.shell("uiautomator dump %s" % remote, timeout=60)
-        xml = self.adb.shell("cat %s" % remote)
-        self.save_text("home-uiautomator", xml)
+        try:
+            self.adb.shell("uiautomator dump %s" % remote, timeout=60)
+            xml = self.adb.shell("cat %s" % remote)
+        finally:
+            self.adb.shell("rm -f %s" % remote, check=False)
         out = {}
         for n in parsers.parse_uiautomator(xml):
             key = HOME_LABELS.get(n.text)
@@ -257,6 +261,9 @@ class Device:
             if name in out:
                 raise EvidenceError("uiautomator: two %s buttons" % name)
             out[name] = n.bounds
+        del xml
+        self.save_text("home-targets-uiautomator",
+                       "".join("%s=%s\n" % (k, out[k]) for k in sorted(out)) or "(no probe home controls found)\n")
         if not out:
             raise EvidenceError("uiautomator: no probe home buttons (is the probe home focused and visible?)")
         return out

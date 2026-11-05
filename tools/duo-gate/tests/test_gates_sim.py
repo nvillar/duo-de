@@ -151,6 +151,56 @@ class SimRun(unittest.TestCase):
         self.assertTrue(all(c.status != PASS for c in ime))
         self.assertFalse(any("show_ime" in c for c in fake.sim.commands))
 
+    # -- manual fallbacks / rotation ---------------------------------------------------------------------------------
+    def interactive(self, ctx, fake):
+        def answer(prompt):
+            if "Swipe up from the bottom edge" in prompt:
+                fake.sim.home("A" if "(A)" in prompt else "B")
+            return ""
+        ctx.op = Operator(interactive=True, inp=answer)
+
+    def test_g2_real_gesture_fallback_never_turns_into_an_automated_pass(self):
+        ctx, fake = self.ctx(bugs={"synthetic_home_ignored"}, reps=1)
+        self.interactive(ctx, fake)
+        gates.gate_g2(ctx)
+        s = self.statuses(ctx)
+        self.assertEqual(s["G2.crossHome.A"], INCOMPLETE)            # the synthetic attempt stays as it was
+        manual = next(c for c in ctx.checks if c.id == "G2.crossHomeManual.A")
+        self.assertTrue(manual.manual)
+        self.assertEqual(manual.counts()[PASS], 1)                   # the evidence agreed ...
+        self.assertEqual(manual.status, INCOMPLETE)                  # ... but a manual check never PASSes
+
+    def test_g2_real_gesture_fallback_can_fail(self):
+        ctx, fake = self.ctx(bugs={"synthetic_home_ignored", "home_focused_panel"}, reps=1)
+        self.interactive(ctx, fake)
+        gates.gate_g2(ctx)
+        self.assertEqual(self.statuses(ctx)["G2.crossHomeManual.A"], FAIL)
+
+    def test_operator_performed_checks_are_manual(self):
+        ctx, _ = self.ctx()
+        ctx.pre["secure_lock"] = "NONE"
+        ctx.options["g6_unlock"] = "manual"
+        gates.gate_g6(ctx)
+        gates.gate_g1_launcher3(ctx)
+        manual = {c.id: c.manual for c in ctx.checks}
+        self.assertTrue(manual["G6.unlock.ordinary"])
+        self.assertFalse(manual["G6.locked.ordinary"])
+        self.assertTrue(manual["G1L.A"] and manual["G1L.B"])
+
+    def test_g7_rotation_verified(self):
+        ctx, _ = self.ctx(reps=1)
+        gates.gate_g7(ctx)
+        rot = next(c for c in ctx.checks if c.id == "G7.rotate")
+        self.assertEqual(rot.status, PASS, rot.to_json())
+        self.assertEqual(len(rot.attempts), 4)
+
+    def test_g7_rotation_that_does_not_happen_is_incomplete(self):
+        ctx, _ = self.ctx(bugs={"rotation_ignored"}, reps=1)
+        gates.gate_g7(ctx)
+        rot = next(c for c in ctx.checks if c.id == "G7.rotate")
+        self.assertEqual(rot.status, INCOMPLETE)
+        self.assertNotIn(PASS, {a.status for a in rot.attempts[:3]})
+
     def test_g6_without_secure_lock_is_not_run(self):
         ctx, _ = self.ctx()
         ctx.pre["secure_lock"] = "NONE"

@@ -18,6 +18,7 @@ from .model import EvidenceError, Verdict
 PROBE_HOME = PROBE_PACKAGE + "/.ProbeHomeActivity"
 PROBE_PROTOCOL = "gate-2"
 PANEL_PROPS = ("persist.sys.phh.duo.panels", "persist.debug.phh.duo.panels")
+REBOOT_SETTLE = 5.0
 
 # (namespace, key, value the gate needs, why). show_ime_with_hard_keyboard is deliberately not here: it is recorded in
 # the preconditions and left at the device's value, because forcing it could mask IME defects.
@@ -110,7 +111,8 @@ def check_panel_mode(dev) -> Verdict:
 
 def write_restore(dev, pre: dict) -> str:
     data = {"home": pre.get("home"), "settings": pre.get("settings_before", {}),
-            "panels": {k: pre["panels"].get(k, "") for k in PANEL_PROPS}}
+            "panels": {k: pre["panels"].get(k, "") for k in PANEL_PROPS},
+            "active": pre["panels"].get("sys.duode.panels.active")}
     return dev.write_json("restore.json", data)
 
 
@@ -126,8 +128,14 @@ def apply_test_settings(dev, pre: dict) -> list[str]:
     return applied
 
 
-def restore(dev, data: dict) -> Verdict:
-    """Puts back the recorded settings and HOME, then reads them back."""
+def _off(value) -> bool:
+    return value in (None, "", "0", "false")
+
+
+def restore(dev, data: dict, reboot: bool = False) -> Verdict:
+    """Puts back the recorded settings, HOME and panel properties, then reads them back. The panel properties are only
+    read at boot: if they (or the boot's sys.duode.panels.active) differ from the recorded state, the device is
+    rebooted only when `reboot` authorizes it; otherwise the result stays INCOMPLETE with the recovery command."""
     v = Verdict()
     adb = dev.adb
     for nk, value in data.get("settings", {}).items():
@@ -146,10 +154,38 @@ def restore(dev, data: dict) -> Verdict:
             v.fail("HOME not restored to %s: %s" % (home, e))
     else:
         v.incomplete("original HOME unknown (%r); set it by hand" % (home,))
+
+    reboot_needed = False
     for k, want in data.get("panels", {}).items():
         got = _try(lambda: adb.getprop(k))
-        if got != want:
-            v.fail("%s=%r, recorded %r (reboot needed after restoring it)" % (k, got, want))
+        if got == want or (_off(got) and _off(want)):
+            continue
+        adb.shell("setprop %s %s" % (k, want if want else "0"), check=False)
+        got = _try(lambda: adb.getprop(k))
+        if got == want or (_off(got) and _off(want)):
+            reboot_needed = True
+            v.note("%s restored to %r" % (k, want))
+        else:
+            v.fail("%s=%r, could not restore the recorded %r (persist.sys.* needs adb root)" % (k, got, want))
+    active = data.get("active")
+    if active is not None and _try(lambda: adb.getprop("sys.duode.panels.active")) != active:
+        reboot_needed = True
+    if reboot_needed:
+        if not reboot:
+            v.incomplete("panel mode differs from the recorded boot state; a reboot applies the restored properties: "
+                         "duo_gate.py restore <evidence dir> --reboot (or adb reboot)")
+        else:
+            try:
+                adb.run(["reboot"], check=False)
+                time.sleep(REBOOT_SETTLE)
+                adb.wait_for_boot()
+                now = adb.getprop("sys.duode.panels.active")
+                if active is not None and now != active:
+                    v.fail("after reboot sys.duode.panels.active=%r, recorded %r" % (now, active))
+                else:
+                    v.note("rebooted to apply the restored panel properties")
+            except AdbError as e:
+                v.incomplete("reboot to apply the panel properties: %s" % e)
     return v
 
 

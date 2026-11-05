@@ -299,6 +299,36 @@ class Keyguard(unittest.TestCase):
                     input=sim.inputdump([self.a, self.b], None, True))
         self.assertEqual(C.eval_locked(events, snap, (21,), 20).status, INCOMPLETE)
 
+    def locked_snap(self, windows=None, inp=None):
+        tasks = [self.a, self.b]
+        return Snap(activities=sim.activities(tasks, keyguard=True),
+                    windows=windows if windows is not None else sim.windows(tasks, keyguard=True),
+                    wdisplays=sim.wdisplays(None, None, True),
+                    input=inp if inp is not None else sim.inputdump(tasks, None, True))
+
+    def test_input_focus_on_ordinary_window_while_wm_focus_is_keyguard_fails(self):
+        events, _ = window(sim.marker("r.1"))
+        inp = sim.inputdump([self.a, self.b], None, True).replace(
+            "name='671cb1b NotificationShade'", "name='%s org.duode.probe/org.duode.probe.%s'" % (self.b.win, self.b.cls))
+        v = C.eval_locked(events, self.locked_snap(inp=inp), (21,), 20)
+        self.assertEqual(v.status, FAIL)
+        self.assertTrue(any("input focus" in r for r in v.reasons), v.reasons)
+
+    def test_missing_input_focus_is_not_a_pass(self):
+        events, _ = window(sim.marker("r.1"))
+        inp = sim.inputdump([self.a, self.b], None, True).replace("name='671cb1b NotificationShade'", "name=''")
+        self.assertEqual(C.eval_locked(events, self.locked_snap(inp=inp), (21,), 20).status, INCOMPLETE)
+
+    def test_unparsed_visibility_is_not_hidden(self):
+        events, _ = window(sim.marker("r.1"))
+        text = sim.windows([self.a, self.b], keyguard=True)
+        text = text.replace("    isOnScreen=false\n", "").replace("    isVisible=false\n", "")
+        self.assertEqual(C.eval_locked(events, self.locked_snap(windows=text), (21,), 20).status, INCOMPLETE)
+
+    def test_ordinary_task_without_a_window_is_not_a_pass(self):
+        events, _ = window(sim.marker("r.1"))
+        self.assertEqual(C.eval_locked(events, self.locked_snap(), (21, 99), 20).status, INCOMPLETE)
+
     def test_occlusion(self):
         snap = Snap(activities=sim.activities([self.a, self.b], keyguard=True, occluded=False),
                     windows=sim.windows([self.a, self.b], keyguard=True, leak=20))
@@ -312,6 +342,22 @@ class Keyguard(unittest.TestCase):
         self.assertEqual(C.eval_unlocked(snap_for([self.a, self.b], keyguard=True), {20: "A", 21: "B"}).status,
                          INCOMPLETE)
         self.assertEqual(C.eval_unlocked(snap_for([self.a, self.b]), {20: "B", 21: "B"}).status, FAIL)
+
+
+class Rotation(unittest.TestCase):
+    def snap(self, rotation):
+        return Snap(wdisplays=sim.wdisplays(None, rotation=rotation))
+
+    def test_rotation(self):
+        self.assertEqual(C.eval_rotation(self.snap(1), 1, True).status, PASS)
+        self.assertEqual(C.eval_rotation(self.snap(0), 1, True).status, INCOMPLETE)     # did not rotate
+        self.assertEqual(C.eval_rotation(self.snap(1), 1, False).status, INCOMPLETE)    # no action-scoped evidence
+        no_rotation = Snap(wdisplays=sim.wdisplays(None).replace("mDisplayRotation=ROTATION_0 ", ""))
+        self.assertEqual(C.eval_rotation(no_rotation, 0, True).status, INCOMPLETE)
+
+    def test_real_capture_rotation(self):
+        from duogate.parsers import parse_window_displays
+        self.assertEqual(parse_window_displays(sim.fixture("off-window-displays.txt")).rotation, 0)
 
 
 class Invariants(unittest.TestCase):
@@ -379,6 +425,11 @@ class CheckModel(unittest.TestCase):
 
     def test_skipped_is_incomplete(self):
         self.assertEqual(Check("x", "G", "t").skip("no PIN").status, INCOMPLETE)
+
+    def test_unattempted_check_never_passes(self):
+        c = Check("x", "G", "t", required=0)
+        self.assertEqual(c.status, INCOMPLETE)
+        self.assertIn("no repetition attempted", c.summary_reason())
 
 
 if __name__ == "__main__":

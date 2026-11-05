@@ -49,10 +49,11 @@ uv run --no-project python tools/duo-gate/duo_gate.py run                  # def
 uv run --no-project python tools/duo-gate/duo_gate.py run G1 G2 --reps 3   # selected gates
 uv run --no-project python tools/duo-gate/duo_gate.py run all --allow-reboot   # every gate incl. guided ones and PO
 uv run --no-project python tools/duo-gate/duo_gate.py restore ~/duogate-evidence/duogate-<run>   # after an interrupted run
+uv run --no-project python tools/duo-gate/duo_gate.py restore ~/duogate-evidence/duogate-<run> --reboot   # also reboot if the panel properties had to be restored
 uv run --no-project python tools/duo-gate/duo_gate.py report ~/duogate-evidence/duogate-<run>    # re-render report.md
 ```
 
-Options for `run`: `--reps N` (default 10), `--settle S` (max seconds to wait for an expected event, default 8),
+Options for `run`: `--reps N` (>= 1, default 10; 0 or negative is rejected), `--settle S` (max seconds to wait for an expected event, default 8),
 `--screens key|all|none`, `--no-input` (no prompts: manual steps stay INCOMPLETE), `--allow-reboot` (PO),
 `--g6-unlock pin|manual`, `--launcher-app` (G1L, default Calendar), `--quickstep` (Launcher3 HOME component for G1L/G3),
 `--keep-settings` (skip restoration), `--out DIR` (default `~/duogate-evidence`, outside the repository), global `--serial`, `--adb`.
@@ -73,8 +74,11 @@ Exit code: 0 PASS, 1 FAIL, 2 INCOMPLETE, 3 usage error.
    not appear on the first tap fails G5).
 3. **Gates** in order G1, G1L, G2, G4, G5, G6, G3, G7, PO, G9 (only those selected). Probe test tasks are removed
    between setups (`am stack remove`, verified in the dumps).
-4. **Restore** settings and HOME and read them back (also on errors). Panel properties are never changed except by PO,
-   which restores and reboots itself.
+4. **Restore** (in a `finally`: also after errors, a lost device or Ctrl-C; probe task cleanup is best-effort and
+   cannot skip it) settings, HOME and both panel properties, and read them back. Panel properties are only changed by
+   PO, which restores and reboots itself; if they (or the boot's `sys.duode.panels.active`) still differ from the
+   recorded state, they are restored and the result stays INCOMPLETE "reboot required" unless `--allow-reboot` (or
+   `restore --reboot`) authorizes the reboot, after which panel mode is verified.
 5. **Report**: `report.md`, `results.json`, console summary.
 
 ### Gates
@@ -82,13 +86,13 @@ Exit code: 0 PASS, 1 FAIL, 2 INCOMPLETE, 3 usage error.
 | Gate | Scripted (automated, can PASS) | Guided (manual, never PASS) |
 |---|---|---|
 | G1 | `G1.launch.A/B`: N taps on *Probe test* per side from the probe home (launch, then reuse after Home): `launch` event side/label, same task id on reuse, `onResume` bounds = panel, task under `Panel0Tasks`/`Panel1Tasks`, `mode=fullscreen`, not policy-hidden. `G1.launch0.A/B`: same with *Send launchDisplayId=0*. `G1.crossReuse`: the one *Probe test* task follows taps on alternating panels. `G1.amStartDisplay0`: `am start --display 0` (not from home) lands in `DefaultTaskDisplayArea`, fullscreen, display bounds. | `G1.freeformRequest`: `am start --windowingMode 5`, placement recorded (policy undefined until M2.5). |
-| G1L | `G1L.A/B` (operator taps the `--launcher-app` icon in Launcher3 on the named panel): task placement/mode/reuse, and the tap side verified from the launch intent's source bounds (wrong side -> INCOMPLETE). Needs an operator. | |
-| G2 | `G2.home.A/B`: focus the panel by a tap on its probe (touch receipt + WM/input focus), Home key: `Home: minimizing PanelN` names that panel only, its task gets the policy flag (8), the other task stays placed, visible, not stopped (pauses recorded), and takes a tap. `G2.restore.A/B`: relaunch reuses the same task, `Restored minimized`, not hidden. `G2.crossHome.A/B`: focus the *other* panel by a tap, then a Home swipe from this panel's bottom edge, without a preparatory tap; same assertions. If the synthetic swipe is not taken as a gesture, the operator is asked for the real one (recorded). | |
+| G1L | | `G1L.A/B` (operator taps the `--launcher-app` icon in Launcher3 on the named panel): task placement/mode/reuse, and the tap side verified from the launch intent's source bounds (wrong side -> INCOMPLETE). Machine-verified, but operator-performed, so never PASS. |
+| G2 | `G2.home.A/B`: focus the panel by a tap on its probe (touch receipt + WM/input focus), Home key: `Home: minimizing PanelN` names that panel only, its task gets the policy flag (8), the other task stays placed, visible, not stopped (pauses recorded), and takes a tap. `G2.restore.A/B`: relaunch reuses the same task, `Restored minimized`, not hidden. `G2.crossHome.A/B`: focus the *other* panel by a tap, then a Home swipe from this panel's bottom edge, without a preparatory tap; same assertions. If the synthetic swipe is not taken as a gesture, that attempt stays INCOMPLETE. | `G2.crossHomeManual.A/B`: created only when the synthetic swipe was not recognized; the operator performs the real gesture, same assertions (can FAIL, never PASS). |
 | G4 | `G4.back.A/B`: focus the other panel by a tap, Back swipe from this panel's outer edge: this task pauses and stops, the other does not, stays placed and visible; Back on the probe home fails. | `G4.hingeBack.A/B` (hinge-side edge), `G4.backCancel.A/B` (predictive Back cancelled: no lifecycle change; operator confirms the animation stayed in the panel). |
-| G5 | `G5.ime.*` (A editor 1, A editor 2, A->B, B->A with one tap, F10): tap receipt; editor focus; latest insets non-zero for the target; latest insets of the other task zero (`imeVisible=true` with zero insets is accepted, F10 correction); `ImeContainer` bounds and requested-bounds = target panel; IME input/layering/control targets = the target task's window; a typed sentinel reaches the target editor only. `G5.otherTouchable`: the other panel takes a tap with the keyboard up. `G5.rotate`: rotate 90 (settings), bring the keyboard up again in the relaunched probe, keyboard confined to the target's panel area, areas do not overlap, both tasks back on their panels after rotating back. | `G5.foldKeyboard`. |
-| G6 | Three phases (ordinary tasks on both panels; *Probe locked* (showWhenLocked) on A; on B), N lock cycles each: power off/on, then an attempted tap on the ordinary task. `G6.locked.*`: keyguard showing, no ordinary window on screen/visible, touchable in the input dispatcher or focused, no `onResume`/touch/text/editor focus in an ordinary task. `G6.unlock.*`: keyguard gone, task ids and panels kept. `G6.occlusion.swlA/B`: functional F8 (showWhenLocked occludes and is on screen). The PIN is asked once (not echoed, never written: redacted in `commands.log`) and typed only when the focused window belongs to SystemUI; the first failed unlock stops G6 (no blind retries). `--g6-unlock manual` lets the operator unlock on the device instead. | |
+| G5 | `G5.ime.*` (A editor 1, A editor 2, A->B, B->A with one tap, F10): tap receipt; editor focus; latest insets non-zero for the target; latest insets of the other task zero (`imeVisible=true` with zero insets is accepted, F10 correction); `ImeContainer` bounds and requested-bounds = target panel; IME input/layering/control targets = the target task's window; a typed sentinel reaches the target editor only. `G5.otherTouchable`: the other panel takes a tap with the keyboard up. `G5.rotate`: rotate 90 (settings; completion and display rotation verified as in G7), bring the keyboard up again in the relaunched probe, keyboard confined to the target's panel area, areas do not overlap, both tasks back on their panels after rotating back. | `G5.foldKeyboard`. |
+| G6 | Three phases (ordinary tasks on both panels; *Probe locked* (showWhenLocked) on A; on B), N lock cycles each: power off/on, then an attempted tap on the ordinary task. `G6.locked.*`: keyguard showing; every ordinary task window explicitly `isOnScreen=false` and `isVisible=false` (unreported visibility or no window -> INCOMPLETE); not touchable in the input dispatcher; WM focus and input-dispatcher focus (checked independently; missing or unresolvable -> INCOMPLETE) not on an ordinary task; no `onResume`/touch/text/editor focus in an ordinary task. `G6.unlock.*`: keyguard gone, task ids and panels kept. `G6.occlusion.swlA/B`: functional F8 (showWhenLocked occludes and is on screen). The PIN is asked once (not echoed, never written: redacted in `commands.log`) and typed only when the focused window belongs to SystemUI; the first failed unlock stops G6 (no blind retries). `--g6-unlock manual` lets the operator unlock on the device instead; `G6.unlock.*` are then manual checks (never PASS). | |
 | G3 | | Overview open/select/cancel from each panel with the probe HOME and Quickstep: invariants (no task lost, no stranded policy flag), the selected task's panel (contract: the invoking panel; F7 currently moves it to the default area = FAIL), cancel keeps both tasks in place; operator answers on visibility and scope. |
-| G7 | `G7.rotate`: rotations 90/180/270 in dual posture: tasks keep their panel area by name, task bounds = area bounds, areas do not overlap. | `G7.fold.A/B` (N folds per side: invariants folded and after unfolding, `wm size`, device state and posture composition logged, operator confirms the lit panel shows its own task, F6), `G7.homeFoldRelaunch` (P1b). |
+| G7 | `G7.rotate`: rotations 90/180/270 and back to 0 in dual posture, each completed by action-scoped probe events (`rotation=<n>` after the marker) and the display rotation read from `dumpsys window displays` (not reached -> INCOMPLETE): tasks keep their panel area by name, task bounds = area bounds, areas do not overlap, both tasks back on their panels at 0. | `G7.fold.A/B` (N folds per side: invariants folded and after unfolding, `wm size`, device state and posture composition logged, operator confirms the lit panel shows its own task, F6), `G7.homeFoldRelaunch` (P1b). |
 | PO | Needs `--allow-reboot`: both panel properties to 0, reboot, `sys.duode.panels.active=0`, no `Panel*` areas, probe launches from each side land fullscreen in `DefaultTaskDisplayArea` with display bounds; then the recorded properties are restored, reboot, geometry checked again. A locked device after reboot is handed to the operator. `persist.sys.*` needs `adb root`. | |
 | G9 | `G9.noCrash`: dropbox `system_server_*`, `system_app_*`, `SYSTEM_TOMBSTONE` entries newer than the run start, plus captured `AndroidRuntime` / `ActivityManager` crash and ANR lines: system_server or SystemUI -> FAIL; other apps recorded. | |
 
@@ -108,7 +112,7 @@ The tool prompts for them and collects dumps, screenshots and log windows, but c
 | `logcat.txt` | captured log, **allowlisted tags only** (`DuoGate`, `DuoProbe`, `DuoDisplayAreaPolicy`, `DuoDisplayMask`, `POSTURE PROCESSOR`, and crash/ANR levels of `AndroidRuntime`, `ActivityManager`, `InputDispatcher`, `WindowManager`, `DEBUG`, `libc`) |
 | `snaps/NNNN-<step>-<kind>.txt` | `dumpsys activity containers`, `activity activities`, `window displays`, `window windows`, `input` per step |
 | `screens/*.png` | screenshots (captured on the device and pulled; `--screens`) |
-| `extra/` | dropbox dumps, uiautomator fallback dump |
+| `extra/` | dropbox dumps; with the uiautomator fallback only the probe home control names and bounds (the raw hierarchy is never stored, and is deleted from the device) |
 | `commands.log` | every adb command with return code and duration (secrets redacted) |
 | `operator.log` | prompts and answers (secrets recorded only as entered/empty) |
 | `results.json`, `report.md` | per check: status, pass/fail/incomplete counts of the required repetitions, reasons, notes, evidence links |
@@ -145,5 +149,7 @@ Parsers run against real Duo 1 captures; `tests/sim.py` renders dumps in the sam
 device behind a fake adb, so whole gates run offline. Test-the-tester cases: wrong panel, stale evidence before the
 marker, missing events, ambiguous task identity, tap on the wrong button, reuse creating a new task, Home minimizing the
 focused instead of the gestured panel, Back acting on the focused panel, touch/text reaching the other task, a probe
-without touch logging, keyguard leaks (visible, touchable, input delivered), unparsable dumps, lost device, missing
-repetitions, manual checks, PIN redaction.
+without touch logging, keyguard leaks (visible, touchable, WM or input focus, input delivered, unreported visibility),
+rotations that do not happen, operator fallbacks that must not PASS, unparsable dumps, lost device, Ctrl-C and failed
+cleanup still restoring, panel properties restored (reboot only when authorized), missing or zero repetitions, manual
+checks, PIN redaction, no raw UI hierarchy stored.

@@ -11,7 +11,7 @@ from duogate import cli, preconditions, report
 from duogate.adb import Adb, AdbError
 from duogate.device import Device
 from duogate.logstream import LogBuffer
-from duogate.model import EvidenceError, FAIL, INCOMPLETE, PASS
+from duogate.model import EvidenceError, FAIL, INCOMPLETE, PASS, Rect
 
 from tests.sim import FakeAdb, Sim, marker
 
@@ -85,16 +85,74 @@ class Restore(unittest.TestCase):
         self.assertNotIn(("global", "stay_on_while_plugged_in"), sim.settings)
         self.assertEqual(sim.home_component, data["home"])
 
-    def test_panel_property_mismatch_is_reported(self):
-        self.fake.sim.props["persist.debug.phh.duo.panels"] = "0"
+    def test_panel_property_mismatch_is_restored_and_needs_a_reboot(self):
+        sim = self.fake.sim
+        sim.props["persist.debug.phh.duo.panels"] = "0"
+        data = {"home": "a.b/.C", "settings": {}, "panels": {"persist.debug.phh.duo.panels": "1"}, "active": "1"}
+        v = preconditions.restore(self.dev, data)
+        self.assertEqual(v.status, INCOMPLETE, v.reasons)
+        self.assertTrue(any("--reboot" in r for r in v.reasons), v.reasons)
+        self.assertEqual(sim.props["persist.debug.phh.duo.panels"], "1")
+        self.assertEqual(sim.reboots, 0)
+
+    def test_authorized_reboot_applies_the_restored_panel_properties(self):
+        sim = self.fake.sim
+        sim.props["persist.debug.phh.duo.panels"] = "0"
+        sim.props["sys.duode.panels.active"] = "0"
+        preconditions.REBOOT_SETTLE, old = 0, preconditions.REBOOT_SETTLE
+        try:
+            v = preconditions.restore(self.dev, {"home": "a.b/.C", "settings": {},
+                                                 "panels": {"persist.debug.phh.duo.panels": "1"}, "active": "1"},
+                                      reboot=True)
+        finally:
+            preconditions.REBOOT_SETTLE = old
+        self.assertEqual(v.status, PASS, v.reasons)
+        self.assertEqual((sim.reboots, sim.props["sys.duode.panels.active"]), (1, "1"))
+
+    def test_panel_mode_of_this_boot_differs_from_the_recorded_one(self):
+        # properties already right, but the boot still runs the other mode (e.g. PO interrupted before its reboot)
+        self.fake.sim.props["sys.duode.panels.active"] = "0"
         v = preconditions.restore(self.dev, {"home": "a.b/.C", "settings": {},
-                                             "panels": {"persist.debug.phh.duo.panels": "1"}})
+                                             "panels": {"persist.debug.phh.duo.panels": "1"}, "active": "1"})
+        self.assertEqual(v.status, INCOMPLETE)
+
+    def test_persist_sys_without_root_cannot_be_restored(self):
+        self.fake.sim.props["persist.sys.phh.duo.panels"] = "0"
+        v = preconditions.restore(self.dev, {"home": "a.b/.C", "settings": {},
+                                             "panels": {"persist.sys.phh.duo.panels": "1"}})
         self.assertEqual(v.status, FAIL)
 
     def test_unknown_home_is_not_guessed(self):
         v = preconditions.restore(self.dev, {"home": "android/com.android.internal.app.ResolverActivity",
                                              "settings": {}, "panels": {}})
         self.assertEqual(v.status, INCOMPLETE)
+
+
+class UiFallbackPrivacy(unittest.TestCase):
+    def test_raw_hierarchy_is_never_stored(self):
+        tmp = tempfile.mkdtemp()
+        try:
+            fake = FakeAdb()
+            dev = Device(fake, tmp, "t", live=False)
+            fake.sim = Sim(dev.log)
+            personal = ('<node index="9" text="jane.doe@example.com" resource-id="" class="android.widget.EditText" '
+                        'package="com.example.mail" content-desc="Inbox of Jane" checkable="false" checked="false" '
+                        'clickable="true" enabled="true" focusable="true" focused="false" scrollable="false" '
+                        'long-clickable="true" password="false" selected="false" bounds="[0,0][100,100]" />')
+            fake.sim.ui_xml = fake.sim.ui_xml.replace("</hierarchy>", personal + "</hierarchy>")
+            targets = dev.home_targets_from_ui()
+            self.assertEqual(targets["A.probeTest"], Rect(40, 421, 1310, 581))
+            self.assertIn("rm -f /data/local/tmp/duogate-ui.xml", fake.sim.commands)
+            stored = ""
+            for root, _, files in os.walk(tmp):
+                for name in files:
+                    with open(os.path.join(root, name), encoding="utf-8", errors="replace") as f:
+                        stored += f.read()
+            self.assertIn("A.probeTest=[40,421][1310,581]", stored)
+            for leak in ("jane.doe", "Inbox of Jane", "<hierarchy", "Duo probe home"):
+                self.assertNotIn(leak, stored)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
 
 
 class Reporting(unittest.TestCase):
@@ -166,6 +224,51 @@ class CliRun(unittest.TestCase):
 
     def test_ime_setting_is_never_a_test_setting(self):
         self.assertNotIn("show_ime_with_hard_keyboard", [k for _, k, _, _ in preconditions.TEST_SETTINGS])
+
+    def test_interrupted_run_still_restores_and_reports(self):
+        orig = cli.gates.GATES["G1"]
+
+        def interrupted(ctx):
+            raise KeyboardInterrupt
+        cli.gates.GATES["G1"] = interrupted
+        try:
+            rc = cli.main(["run", "G1", "G2", "--reps", "1", "--no-input", "--out", self.tmp, "--settle", "0.05",
+                           "--screens", "none"])
+        finally:
+            cli.gates.GATES["G1"] = orig
+        r, _ = self.results()
+        sim = self.fakes[0].sim
+        self.assertEqual(rc, 2)
+        self.assertEqual(r["restore"]["status"], PASS, r["restore"])
+        self.assertEqual(sim.home_component, "com.android.launcher3/.uioverrides.QuickstepLauncher")
+        self.assertNotIn(("global", "stay_on_while_plugged_in"), sim.settings)
+        self.assertIn("interrupted", r["aborted"]["G1"])
+        self.assertEqual(r["gates"]["G2"]["status"], INCOMPLETE)
+
+    def test_failed_task_cleanup_does_not_skip_restoration(self):
+        orig = cli.gates.GATES["G1"]
+
+        def breaks_cleanup(ctx):
+            def lost():
+                raise AdbError("device lost during adb shell: error: device 'x' not found")
+            ctx.dev.remove_probe_tasks = lost
+        cli.gates.GATES["G1"] = breaks_cleanup
+        try:
+            cli.main(["run", "G1", "--reps", "1", "--no-input", "--out", self.tmp, "--settle", "0.05",
+                      "--screens", "none"])
+        finally:
+            cli.gates.GATES["G1"] = orig
+        r, _ = self.results()
+        self.assertEqual(r["restore"]["status"], PASS, r["restore"])
+        self.assertTrue(any("cleanup failed" in n for n in r["restore"]["notes"]), r["restore"])
+        self.assertEqual(self.fakes[0].sim.home_component, "com.android.launcher3/.uioverrides.QuickstepLauncher")
+        self.assertEqual(r["gates"]["G1"]["status"], INCOMPLETE)     # a gate that recorded nothing never passes
+
+    def test_zero_or_negative_repetitions_are_rejected(self):
+        for bad in ("0", "-3", "x"):
+            with self.assertRaises(SystemExit):
+                cli.main(["run", "G1", "--reps", bad, "--no-input", "--out", self.tmp])
+        self.assertEqual(os.listdir(self.tmp), [])
 
     def test_old_probe_stops_the_run_before_any_change(self):
         orig = Sim.shell

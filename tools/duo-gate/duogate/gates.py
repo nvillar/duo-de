@@ -27,7 +27,7 @@ class Ctx:
         self.checks: list[Check] = []
 
     def check(self, cid: str, gate: str, title: str, required: int | None = None, manual: bool = False) -> Check:
-        c = Check(cid, gate, title, self.reps if required is None else required, manual)
+        c = Check(cid, gate, title, max(1, self.reps if required is None else required), manual)
         self.checks.append(c)
         return c
 
@@ -253,7 +253,9 @@ def gate_g1_launcher3(ctx: Ctx) -> None:
     dev, op, n = ctx.dev, ctx.op, ctx.reps
     pkg = ctx.options.get("launcher_app", "com.android.calendar")
     quickstep = ctx.options.get("quickstep", "com.android.launcher3/.uioverrides.QuickstepLauncher")
-    chks = {s: ctx.check("G1L.%s" % s, "G1L", "Launcher3 icon tap (%s) lands in panel %s" % (pkg, s)) for s in SIDES}
+    # operator-performed taps: machine-verified (placement, reuse, tap side) but never an automated PASS
+    chks = {s: ctx.check("G1L.%s" % s, "G1L", "Launcher3 icon tap (%s) lands in panel %s" % (pkg, s), manual=True)
+            for s in SIDES}
     if not op.interactive:
         for c in chks.values():
             c.skip("needs an operator (non-interactive run)")
@@ -336,38 +338,54 @@ def gate_g2(ctx: Ctx) -> None:
             _record(restore[s], attempt_restore)
             restore_pair(ctx, pair, PAIR_KEYS, tag + ".clean")
 
+    manual: dict = {}
+
+    def manual_check(s):
+        if s not in manual:
+            manual[s] = ctx.check("G2.crossHomeManual.%s" % s, "G2", "Real Home gesture on panel %s while the other "
+                                  "panel is focused (operator fallback when the synthetic swipe is not recognized)"
+                                  % s, required=1, manual=True)
+        return manual[s]
+
     for s in SIDES:
         o = other(s)
         p = dev.geo.panel(s)
         x = (p.left + p.right) // 2
         for i in range(n):
             tag = "G2.cross.%s.%d" % (s, i + 1)
+            held = {"unrecognized": False}
 
-            def attempt(s=s, o=o, tag=tag):
+            def attempt(s=s, o=o, tag=tag, held=held):
                 v, ev, _ = focus_by_touch(ctx, o, pair[o], (pair[s],), tag + ".focusOther")
                 st = dev.step(tag, lambda: dev.swipe(x, p.bottom - 3, x, p.bottom - 700, 250),
                               until=_stopped(pair[s], pair[o]))
                 hv = C.eval_home(st.lines, st.events, st.snap, s, pair[s], pair[o], dev.geo)
-                evidence = ev + st.evidence
-                if hv.status == INCOMPLETE and not any(C.policy_minimized_panel(l) for l in st.lines) \
-                        and op.interactive:
-                    # the synthetic swipe was not taken as a Home gesture: ask for the real one, same evidence rules
-                    mid, start = dev.mark(tag + ".manual")
-                    if op.wait("Swipe up from the bottom edge of the %s panel (%s) to go Home. Do NOT tap that panel "
-                               "first." % ("LEFT" if s == "A" else "RIGHT", s)):
-                        dev.log.wait_for(start, _stopped(pair[s], pair[o]), dev.settle)
-                        time.sleep(dev.quiet)
-                        end = dev.end(mid)
-                        snap = dev.snap(mid + "-" + tag + ".manual")
-                        hv = C.eval_home(dev.log.between(start, end), dev.log.events(start, end), snap, s, pair[s],
-                                         pair[o], dev.geo)
-                        hv.note("Home performed by the operator (real gesture)")
-                        evidence += ["marker " + mid] + snap.files
-                else:
-                    hv.note("Home by synthetic swipe")
+                hv.note("Home by synthetic swipe")
+                held["unrecognized"] = not any(C.policy_minimized_panel(l) for l in st.lines)
                 v.merge(hv)
-                return v, evidence, st.marker
+                return v, ev + st.evidence, st.marker
             _record(cross[s], attempt)
+
+            if held["unrecognized"] and op.interactive:
+                # The automated attempt stays as recorded (INCOMPLETE); the operator's real gesture is a separate,
+                # manual check: it can FAIL on contradicting evidence but never PASS.
+                restore_pair(ctx, pair, PAIR_KEYS, tag + ".manual.clean")
+
+                def attempt_manual(s=s, o=o, tag=tag):
+                    v, ev, _ = focus_by_touch(ctx, o, pair[o], (pair[s],), tag + ".manual.focusOther")
+                    mid, start = dev.mark(tag + ".manual")
+                    if not op.wait("Swipe up from the bottom edge of the %s panel (%s) to go Home. Do NOT tap that "
+                                   "panel first." % ("LEFT" if s == "A" else "RIGHT", s)):
+                        raise SetupError("operator skipped")
+                    dev.log.wait_for(start, _stopped(pair[s], pair[o]), dev.settle)
+                    time.sleep(dev.quiet)
+                    end = dev.end(mid)
+                    snap = dev.snap(tag + ".manual")
+                    v.merge(C.eval_home(dev.log.between(start, end), dev.log.events(start, end), snap, s, pair[s],
+                                        pair[o], dev.geo))
+                    v.note("Home performed by the operator (real gesture)")
+                    return v, ev + ["marker " + mid] + snap.files, mid
+                _record(manual_check(s), attempt_manual)
             restore_pair(ctx, pair, PAIR_KEYS, tag + ".clean")
 
 
@@ -529,9 +547,17 @@ def gate_g5(ctx: Ctx) -> None:
         # and that both tasks keep their panel areas. Rotation with a surviving IME target (configChanges app,
         # frameworks 0015) is not covered by the probe.
         t, o = pair["A"], pair["B"]
-        rotated = dev.step("G5.rotate", lambda: dev.adb.put_setting("system", "user_rotation", "1"),
-                           until=lambda evs: any(e.task == t and e.event == "targets" for e in evs), timeout=15)
-        c = rotated.snap.containers
+
+        def rotated(r):
+            return lambda evs: any(e.task == t and e.kv.get("rotation") == str(r) for e in evs) and any(
+                e.task == t and e.event == "targets" for e in evs)
+        rotated_step = dev.step("G5.rotate", lambda: dev.adb.put_setting("system", "user_rotation", "1"),
+                                until=rotated(1), timeout=2 * dev.settle)
+        v = C.eval_rotation(rotated_step.snap, 1, rotated_step.settled)
+        if not v.ok:
+            dev.adb.put_setting("system", "user_rotation", "0")
+            return v, rotated_step.evidence, rotated_step.marker
+        c = rotated_step.snap.containers
         node = c.task(t)
         area = c.task_display_area(node) if node else None
         if area is None:
@@ -539,12 +565,13 @@ def gate_g5(ctx: Ctx) -> None:
         x, y = dev.point(dev.task_targets(t), "editor1", area=area.bounds)
         st = dev.step("G5.rotate.ime", lambda: dev.tap(x, y), until=lambda evs: any(
             e.task == t and e.event == "insets" and ime_up(e) for e in evs))
-        v = C.eval_touch(st.events, x, y, t, (o,))
+        v.merge(C.eval_touch(st.events, x, y, t, (o,)))
         v.merge(C.eval_ime_rotated(st.events, st.snap, t, o))
         back = dev.step("G5.rotate.back", lambda: dev.adb.put_setting("system", "user_rotation", "0"),
-                        until=lambda evs: any(e.task == t and e.event == "targets" for e in evs), timeout=15)
+                        until=rotated(0), timeout=2 * dev.settle)
+        v.merge(C.eval_rotation(back.snap, 0, back.settled))
         v.merge(C.eval_invariants(back.snap, {t: "A", o: "B"}, expect_sides=True, geo=dev.geo))
-        return v, rotated.evidence + st.evidence + back.evidence, st.marker
+        return v, rotated_step.evidence + st.evidence + back.evidence, st.marker
     _record(rot, attempt_rotate)
 
     if not op.interactive:
@@ -597,16 +624,18 @@ def gate_g6(ctx: Ctx) -> None:
     phases = [("ordinary", {"A": "probeTest", "B": "probeTest2"}, None),
               ("swlA", {"A": "probeLocked", "B": "probeTest2"}, "A"),
               ("swlB", {"A": "probeTest", "B": "probeLocked"}, "B")]
+    mode = ctx.options.get("g6_unlock", "pin")
     checks = {}
     for name, keys, swl in phases:
         checks[name] = (
             ctx.check("G6.locked.%s" % name, "G6", "Locked (%s): keyguard covers both panels; no ordinary content "
                       "visible, focused or touchable; attempted taps not delivered" % name),
-            ctx.check("G6.unlock.%s" % name, "G6", "Unlock (%s): keyguard gone, tasks kept ids and panels" % name),
+            # an operator unlock is a manual action: its success is never an automated PASS
+            ctx.check("G6.unlock.%s" % name, "G6", "Unlock (%s): keyguard gone, tasks kept ids and panels" % name,
+                      manual=(mode == "manual")),
             ctx.check("G6.occlusion.%s" % name, "G6", "showWhenLocked task occludes the keyguard on its panel (F8, "
                       "functional)") if swl else None)
     cred = ctx.pre.get("secure_lock")
-    mode = ctx.options.get("g6_unlock", "pin")
     reason = None
     if cred not in ("PIN", "PASSWORD", "PATTERN"):
         reason = "no secure screen lock (credential %s): set a PIN on the device first" % cred
@@ -767,8 +796,8 @@ def gate_g7(ctx: Ctx) -> None:
                          "tasks back on their panels; lit panel shows its own task" % s, manual=True) for s in SIDES}
     homefold = ctx.check("G7.homeFoldRelaunch", "G7", "Home on B, fold to A-only, relaunch B's app: visible, resumed, "
                          "restored (P1b)", 1, manual=True)
-    rot = ctx.check("G7.rotate", "G7", "Rotation 90/180/270 in dual posture: tasks keep their panel areas, no overlap",
-                    required=3)
+    rot = ctx.check("G7.rotate", "G7", "Rotation 90/180/270 and back to 0 in dual posture (display rotation verified): "
+                    "tasks keep their panel areas, no overlap, back on their panels at 0", required=4)
     try:
         pair = setup_pair(ctx, PAIR_KEYS, "G7.setup")
     except SetupError as e:
@@ -777,12 +806,18 @@ def gate_g7(ctx: Ctx) -> None:
         return
     tasks = {pair["A"]: "A", pair["B"]: "B"}
 
-    for r in (1, 2, 3):
+    def rotated_to(r):
+        """Action-scoped completion: every probe task reported the requested rotation after the marker."""
+        return lambda evs: all(any(e.task == t and e.kv.get("rotation") == str(r) for e in evs) for t in tasks)
+
+    for r in (1, 2, 3, 0):
         def attempt(r=r):
             st = dev.step("G7.rotate.%d" % r, lambda: dev.adb.put_setting("system", "user_rotation", str(r)),
-                          until=lambda evs: any(e.event in ("onCreate", "onConfigurationChanged") for e in evs),
-                          timeout=15)
-            v = C.eval_invariants(st.snap, tasks, geo=dev.geo)
+                          until=rotated_to(r), timeout=2 * dev.settle)
+            v = C.eval_rotation(st.snap, r, st.settled)
+            if not v.ok:
+                return v, st.evidence, st.marker
+            v.merge(C.eval_invariants(st.snap, tasks, expect_sides=(r == 0), geo=dev.geo))
             c = st.snap.containers
             areas = {}
             for tid, side in tasks.items():
@@ -799,8 +834,6 @@ def gate_g7(ctx: Ctx) -> None:
                 v.fail("panel areas overlap after rotation %d: %s %s" % (r, areas["A"], areas["B"]))
             return v, st.evidence, st.marker
         _record(rot, attempt)
-    dev.step("G7.rotate.0", lambda: dev.adb.put_setting("system", "user_rotation", "0"), snapshot=False,
-             until=lambda evs: any(e.event in ("onCreate", "onConfigurationChanged") for e in evs), timeout=15)
 
     if not op.interactive:
         for c in list(fold.values()) + [homefold]:

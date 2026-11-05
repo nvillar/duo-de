@@ -156,7 +156,7 @@ class Check:
         c = self.counts()
         if c[FAIL]:
             return FAIL
-        if self.skipped is not None or c[INCOMPLETE] or len(self.attempts) < self.required:
+        if self.skipped is not None or c[INCOMPLETE] or not self.attempts or len(self.attempts) < self.required:
             return INCOMPLETE
         if self.manual:
             return INCOMPLETE
@@ -167,7 +167,9 @@ class Check:
             return "not run: " + self.skipped
         c = self.counts()
         parts = []
-        if len(self.attempts) < self.required:
+        if not self.attempts:
+            parts.append("no repetition attempted")
+        elif len(self.attempts) < self.required:
             parts.append("%d of %d required repetitions evidenced" % (len(self.attempts), self.required))
         if c[INCOMPLETE]:
             parts.append("%d repetition(s) incomplete" % c[INCOMPLETE])

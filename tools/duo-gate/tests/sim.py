@@ -163,7 +163,7 @@ def _w(t: Task | None) -> str:
     return "Window{%s u0 org.duode.probe/org.duode.probe.%s}" % (t.win, t.cls) if t else "null"
 
 
-def wdisplays(focus: Task | None, ime: Task | None = None, keyguard: bool = False) -> str:
+def wdisplays(focus: Task | None, ime: Task | None = None, keyguard: bool = False, rotation: int = 0) -> str:
     cur = "Window{671cb1b u0 NotificationShade}" if keyguard else _w(focus)
     app = ("ActivityRecord{%d u0 org.duode.probe/.%s t%d}" % (100000 + focus.tid, focus.cls, focus.tid)
            if focus else "null")
@@ -171,6 +171,8 @@ def wdisplays(focus: Task | None, ime: Task | None = None, keyguard: bool = Fals
         "WINDOW MANAGER DISPLAY CONTENTS (dumpsys window displays)",
         "  Display: mDisplayId=0 (organized)",
         "    init=2784x1800 400dpi mMinSizeOfResizeableTaskDp=220 cur=2784x1800 app=2784x1800",
+        "  overrideConfig={1.0 ?mcc0mnc [en_US] winConfig={ mBounds=Rect(0, 0 - 2784, 1800) "
+        "mDisplayRotation=ROTATION_%d mWindowingMode=fullscreen} s.75}" % (rotation * 90),
         "  mImeLayeringTarget=%s" % _w(ime), "  mImeInputTarget=%s" % _w(ime), "  mImeControlTarget=%s" % _w(ime),
         "  mCurrentFocus=%s" % cur, "  mFocusedApp=%s" % app, "  mFixedRotationLaunchingApp=null", ""])
 
@@ -298,10 +300,22 @@ class Sim:
                       "ro.build.display.id": "treble_arm64_bvN-userdebug 16 SIM", "ro.duode.dev_build": "true"}
         self.home_component = "com.android.launcher3/.uioverrides.QuickstepLauncher"
         self.credential = "NONE"
+        self.ui_xml = fixture("probe-home-uiautomator.xml")
+        self.props["sys.boot_completed"] = "1"
+        self.rotation = 0
+        self.reboots = 0
+        self.root = False
         self.emit(home_targets())
 
     def emit(self, raw: str) -> None:
         self.log.feed(raw)
+
+    def reboot(self):
+        self.reboots += 1
+        self.tasks = []
+        on = "1" in (self.props.get("persist.sys.phh.duo.panels"), self.props.get("persist.debug.phh.duo.panels"))
+        self.props["sys.duode.panels.active"] = "1" if on else "0"
+        self.props["sys.boot_completed"] = "1"
 
     def task_at(self, side):
         live = [t for t in self.tasks if t.area == side and not t.hidden & 8 and not t.stopped]
@@ -438,6 +452,9 @@ class Sim:
             if op == "put":
                 self.settings[(ns, key)] = value.strip("'")
                 if key == "user_rotation":
+                    if "rotation_ignored" in self.bugs:
+                        return ""
+                    self.rotation = int(value)
                     for t in self.tasks:
                         self.emit(probe("onConfigurationChanged", t, "display=0 rotation=%s" % value))
                         self.emit(targets_for(t))
@@ -475,6 +492,15 @@ class Sim:
             return "Drop box contents: 0 entries\nMax entries: 1000\n"
         if cmd.startswith("rm -f"):
             return ""
+        m = re.match(r"setprop (\S+) (\S+)$", cmd)
+        if m:
+            if not m.group(1).startswith("persist.sys.") or self.root:
+                self.props[m.group(1)] = m.group(2)
+            return ""
+        if cmd.startswith("uiautomator dump"):
+            return "UI hierchary dumped to: /data/local/tmp/duogate-ui.xml\n"
+        if cmd == "cat /data/local/tmp/duogate-ui.xml":
+            return self.ui_xml
         if cmd == "dumpsys activity containers":
             return containers(self.tasks)
         if cmd == "dumpsys activity activities":
@@ -482,7 +508,7 @@ class Sim:
         if cmd == "dumpsys window windows":
             return windows(self.tasks)
         if cmd == "dumpsys window displays":
-            return wdisplays(focus)
+            return wdisplays(focus, rotation=self.rotation)
         if cmd == "dumpsys input":
             return inputdump(self.tasks, focus)
         if cmd.startswith("screencap"):
@@ -512,5 +538,10 @@ class FakeAdb(Adb):
         if args[0] == "get-serialno":
             return "SIMULATED\n"
         if args[0] == "pull":
+            return ""
+        if args[0] == "reboot":
+            self.sim.reboot()
+            return ""
+        if args[0] == "wait-for-device":
             return ""
         raise AssertionError("unexpected adb %r" % args)
