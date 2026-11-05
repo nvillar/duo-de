@@ -111,7 +111,12 @@ class LogStream(LogBuffer):
 
     def __init__(self, command: list[str], path: str):
         super().__init__(path)
-        self._proc = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        try:
+            self._proc = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        except OSError as e:
+            super().close()
+            from .adb import AdbError
+            raise AdbError("cannot start %s: %s" % (command[0], e)) from None
         self._thread = threading.Thread(target=self._pump, daemon=True)
         self._thread.start()
 

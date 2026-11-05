@@ -115,6 +115,10 @@ def render(r: dict) -> str:
 
 def console(r: dict) -> str:
     out = ["", "duo-gate %s: %s" % (r["run_id"], r["overall"])]
+    pf = r.get("preflight", {})
+    out.append("  preflight: %s %s" % (pf.get("status"), "; ".join(pf.get("reasons", []))))
+    if r.get("restore"):
+        out.append("  restore:   %s %s" % (r["restore"].get("status"), "; ".join(r["restore"].get("reasons", []))))
     for g, gv in r["gates"].items():
         out.append("  %-4s %-10s auto=%d manual=%d pending=%d %s" % (g, gv["status"], gv["automated"], gv["manual"],
                                                                      gv["manual_pending"], gv.get("note", "")))
