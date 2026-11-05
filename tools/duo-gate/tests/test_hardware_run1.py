@@ -1,0 +1,203 @@
+"""Regressions from the first hardware run (duogate-20261104-224305-2036, image m22recents).
+
+Each case reproduces what the run showed, with the real dumps where they matter, and asserts the corrected verdict."""
+import shutil
+import tempfile
+import unittest
+
+from duogate import checks as C
+from duogate import gates, preconditions
+from duogate.device import Device
+from duogate.logstream import KEEP_TAGS, LogBuffer
+from duogate.model import FAIL, INCOMPLETE, PASS, EvidenceError, Rect
+from duogate.parsers import parse_log_line, minimize_event, policy_minimized_panel
+from duogate.prompts import Operator
+
+from tests import sim
+from tests.sim import FakeAdb, Sim, Snap, Task, snap_for
+
+
+def line(msg, tag="DuoDisplayAreaPolicy"):
+    return parse_log_line("11-05 06:48:25.000  1000  1200 I %s: %s" % (tag, msg))
+
+
+class M22MinimizeReasons(unittest.TestCase):
+    """G2.crossHome: M2.2 (fw 0018) logs the gesture Home as 'Home from Recents' / 'Recents #n', not 'Home'."""
+
+    def test_all_reasons_parse(self):
+        for msg, want in (("Home: minimizing Panel1 (1 tasks)", ("Home", "Panel1", 1)),
+                          ("Home from Recents: minimizing Panel0 (1 tasks)", ("Home from Recents", "Panel0", 1)),
+                          ("Recents #1: minimizing Panel0 (2 tasks)", ("Recents #1", "Panel0", 2))):
+            self.assertEqual(minimize_event(line(msg)), want)
+            self.assertEqual(policy_minimized_panel(line(msg)), want[1:])
+        self.assertIsNone(minimize_event(line("Restored minimized Task{1 #21 x}")))
+        self.assertIsNone(minimize_event(line("Home from Recents: minimizing Panel0 (1 tasks)", tag="Other")))
+        self.assertIn("DuoRecents", KEEP_TAGS)
+
+    def test_gesture_home_on_the_gestured_panel_passes(self):
+        a, b = Task(47, "ProbeTestActivity", "A"), Task(48, "ProbeOtherTestActivity", "B")
+        a.hidden = 8
+        buf = LogBuffer()
+        for raw in (sim.marker("r.1"), sim.line("DuoDisplayAreaPolicy", "Home from Recents: minimizing Panel0 (1 tasks)",
+                                                pid=1000), sim.probe("onStop", a)):
+            buf.feed(raw)
+        v = C.eval_home(buf.between(0), buf.events(0), snap_for([a, b]), "A", 47, 48)
+        self.assertEqual(v.status, PASS, v.reasons)
+        self.assertTrue(any("Home from Recents" in n for n in v.notes))
+        v = C.eval_home(buf.between(0), buf.events(0), snap_for([a, b]), "B", 48, 47)
+        self.assertEqual(v.status, FAIL)
+
+
+class M22StuckBack(unittest.TestCase):
+    """G4: after a synthetic Back swipe on A the preview never finished: task 50's input frame stayed at the 0.8
+    preview scale and task 51 (panel B) was dropped from input, so taps on B reached the spanning probe HOME."""
+
+    def snap(self, which):
+        return Snap(windows=sim.fixture("g4-%s-windows.txt" % which), input=sim.fixture("g4-%s-input.txt" % which))
+
+    def test_real_dumps(self):
+        self.assertEqual(C.eval_input_ok(self.snap("before"), 50, "A").status, PASS)
+        self.assertEqual(C.eval_input_ok(self.snap("before"), 51, "B").status, PASS)
+        a = C.eval_input_ok(self.snap("stuck"), 50, "A")
+        self.assertEqual(a.status, FAIL)
+        self.assertTrue(any("[135,180][1215,1620]" in r for r in a.reasons), a.reasons)
+        b = C.eval_input_ok(self.snap("stuck"), 51, "B")
+        self.assertEqual(b.status, FAIL)
+        self.assertTrue(any("not touchable" in r for r in b.reasons), b.reasons)
+
+    def tmpctx(self, bugs):
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp, True)
+        fake = FakeAdb()
+        dev = Device(fake, tmp, "t", settle=0.05, quiet=0, screens="none", live=False)
+        dev.remove_wait = 0
+        fake.sim = Sim(dev.log, bugs)
+        return gates.Ctx(dev, Operator(interactive=False), 3, {"navigation_mode": "2"}), fake
+
+    def test_first_attempt_fails_with_the_cause_and_later_attempts_start_clean(self):
+        ctx, fake = self.tmpctx({"stuck_back"})
+        gates.gate_g4(ctx)
+        back = next(c for c in ctx.checks if c.id == "G4.back.A")
+        self.assertEqual(back.status, FAIL)
+        first = " ".join(back.attempts[0].reasons)
+        self.assertIn("lost input", first)
+        self.assertIn("transformed", first)
+        self.assertTrue(any("pair re-created" in n for n in back.attempts[0].notes), back.attempts[0].notes)
+        for a in back.attempts[1:]:
+            # each later repetition ran on a fresh pair: no inherited 'touch reached the probe HOME'
+            self.assertFalse(any("ProbeHomeActivity" in r for r in a.reasons), a.reasons)
+            self.assertTrue(any("lost input" in r for r in a.reasons), a.reasons)
+
+    def test_without_recreation_the_inherited_state_would_misattribute(self):
+        # the sim reproduces the hardware routing: a tap on B goes to the probe HOME once B lost input
+        ctx, fake = self.tmpctx({"stuck_back"})
+        pair = gates.setup_pair(ctx, gates.PAIR_KEYS, "s")
+        fake.sim.back("A")
+        v, _, _ = gates.focus_by_touch(ctx, "B", pair["B"], (pair["A"],), "f")
+        self.assertEqual(v.status, FAIL)
+        self.assertTrue(any("ProbeHomeActivity" in r for r in v.reasons), v.reasons)
+
+
+class M22TapTargets(unittest.TestCase):
+    """G2.crossHome.B: the synthetic Home swipe scrolled probe A (title at [40,-30]); G5.ime.A.editor2: editor 2 at
+    y=1020 was under the keyboard (ime bottom 1008, keyboard top 792), so the tap reached the IME."""
+
+    def dev(self, bugs=()):
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp, True)
+        fake = FakeAdb()
+        dev = Device(fake, tmp, "t", settle=0.05, quiet=0, screens="none", live=False)
+        fake.sim = Sim(dev.log, bugs)
+        t = Task(50, "ProbeTestActivity", "A")
+        fake.sim.tasks.append(t)
+        return dev, fake, t
+
+    def test_scrolled_title_is_scrolled_back_with_gate3(self):
+        dev, fake, t = self.dev({"scroll_targets"})
+        t.scroll = 290
+        fake.sim.emit(sim.targets_for(t))
+        x, y = dev.task_point(50, "title", "A")
+        self.assertTrue(220 < y < 1720, y)
+        self.assertEqual(t.scroll, 0)
+        self.assertTrue(any(c.startswith("input swipe") for c in fake.sim.commands))
+
+    def test_editor_under_the_keyboard_is_scrolled_into_view_with_gate3(self):
+        dev, fake, t = self.dev({"scroll_targets"})
+        fake.sim.emit(sim.targets_for(t))
+        fake.sim.emit(sim.probe("insets", t, "imeVisible=true ime=[0,0,0,1008] bars=[0,220,0,1008] cutout=null"))
+        x, y = dev.task_point(50, "editor2", "A")
+        self.assertTrue(220 + 10 <= y <= 1800 - 1008 - 10, y)      # above the keyboard top (792)
+        self.assertGreater(t.scroll, 0)
+
+    def test_visible_target_needs_no_scroll(self):
+        dev, fake, t = self.dev({"scroll_targets"})
+        fake.sim.emit(sim.targets_for(t))
+        fake.sim.emit(sim.probe("insets", t, "imeVisible=true ime=[0,0,0,1008] bars=[0,220,0,1008] cutout=null"))
+        self.assertEqual(dev.task_point(50, "title", "A"), (675, 300))
+        self.assertFalse(any(c.startswith("input swipe") for c in fake.sim.commands))
+
+    def test_gate2_probe_cannot_report_the_new_position(self):
+        dev, fake, t = self.dev()
+        fake.sim.emit(sim.targets_for(t))
+        fake.sim.emit(sim.probe("insets", t, "imeVisible=true ime=[0,0,0,1008] bars=[0,220,0,1008] cutout=null"))
+        with self.assertRaises(EvidenceError) as cm:
+            dev.task_point(50, "editor2", "A")
+        self.assertIn("gate-3", str(cm.exception))
+
+    def test_probe_protocols(self):
+        self.assertEqual(preconditions.PROBE_PROTOCOLS, ("gate-2", "gate-3"))
+
+
+class M22Rotate(unittest.TestCase):
+    """G5.rotate: the editor tap was received and focused it, but no keyboard came: FAIL, as in eval_ime."""
+
+    def test_no_keyboard_after_the_tap_fails(self):
+        a, b = Task(52, "ProbeTestActivity", "A"), Task(53, "ProbeOtherTestActivity", "B")
+        buf = LogBuffer()
+        for raw in (sim.marker("r.1"), sim.probe("editorFocus", a, "editor=1 focus=true")):
+            buf.feed(raw)
+        v = C.eval_ime_rotated(buf.events(0), snap_for([a, b], ime_area="A"), 52, 53)
+        self.assertEqual(v.status, FAIL, v.reasons)
+
+
+class M22PanelOff(unittest.TestCase):
+    """PO: the keyguard came back after the reboot (no secure lock) and the gate died with 'device still locked'."""
+
+    def ctx(self, credential, bugs=()):
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp, True)
+        fake = FakeAdb()
+        dev = Device(fake, tmp, "t", settle=0.05, quiet=0, screens="none", live=False)
+        dev.remove_wait = 0
+        dev.boot_wait = 0
+        fake.sim = Sim(dev.log, bugs)
+        fake.sim.credential = credential
+        pre = {"secure_lock": credential, "panels": {"persist.sys.phh.duo.panels": "",
+                                                     "persist.debug.phh.duo.panels": "1"}}
+        ctx = gates.Ctx(dev, Operator(interactive=False), 1, pre, {"allow_reboot": True})
+        return ctx, fake
+
+    def test_non_secure_keyguard_is_dismissed_after_each_reboot(self):
+        ctx, fake = self.ctx("NONE")
+        gates.gate_panel_off(ctx)
+        s = {c.id: c.status for c in ctx.checks}
+        self.assertEqual(fake.sim.reboots, 2)
+        self.assertEqual(s, {"PO.panelOff": PASS, "PO.launch.A": PASS, "PO.launch.B": PASS, "PO.restored": PASS},
+                         [c.to_json() for c in ctx.checks])
+        self.assertEqual(fake.sim.commands.count("wm dismiss-keyguard"), 2)
+        self.assertEqual(len(ctx.pre["keyguard_after_reboot"]), 2)
+        self.assertEqual(fake.sim.props["persist.debug.phh.duo.panels"], "1")
+
+    def test_secure_keyguard_without_operator_is_incomplete_not_a_tool_error(self):
+        ctx, fake = self.ctx("PIN")
+        gates.gate_panel_off(ctx)                 # must not raise
+        s = {c.id: c.status for c in ctx.checks}
+        self.assertTrue(all(v == INCOMPLETE for v in s.values()), s)
+        self.assertNotIn("wm dismiss-keyguard", fake.sim.commands)
+        self.assertEqual(fake.sim.reboots, 2)                          # the properties are still restored + applied
+        self.assertEqual(fake.sim.props["persist.debug.phh.duo.panels"], "1")
+        self.assertTrue(all("after reboot" in (c.skipped or "") for c in ctx.checks), [c.skipped for c in ctx.checks])
+
+
+if __name__ == "__main__":
+    unittest.main()

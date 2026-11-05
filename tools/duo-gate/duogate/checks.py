@@ -7,8 +7,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .model import EvidenceError, Rect, Verdict
-from .parsers import (DropboxEntry, LogLine, ProbeEvent, android_bool, policy_minimized_panel,
+from .model import FAIL, EvidenceError, Rect, Verdict
+from .parsers import (DropboxEntry, LogLine, ProbeEvent, android_bool, minimize_event, policy_minimized_panel,
                       policy_restored_task)
 
 POLICY_HIDDEN = 8          # FLAG_FORCE_HIDDEN_FOR_DUO_PANEL (frameworks_base 0014)
@@ -265,12 +265,14 @@ def eval_home(lines: list[LogLine], events: list[ProbeEvent], snap, home_side: s
               other_task: int, geo: Geometry = DUO1) -> Verdict:
     """Home on home_side minimized that panel only; the other panel's task stays placed, visible and not stopped."""
     v = Verdict()
-    minimized = [m for m in (policy_minimized_panel(l) for l in lines) if m]
+    minimized = [m for m in (minimize_event(l) for l in lines) if m]
     if not minimized:
-        v.incomplete("no 'Home: minimizing' log after the marker (Home not delivered or not recognized)")
-    for panel, n in minimized:
+        v.incomplete("no policy minimize log (Home, Home from Recents, Recents #n) after the marker (Home not "
+                     "delivered or not recognized)")
+    for reason, panel, n in minimized:
+        v.note("%s: minimized %s" % (reason, panel))
         if panel != Geometry.group(home_side):
-            v.fail("Home minimized %s, expected %s" % (panel, Geometry.group(home_side)))
+            v.fail("%s minimized %s, expected %s" % (reason, panel, Geometry.group(home_side)))
     acts = _snap(lambda: snap.activities, v, "activities")
     if acts is not None:
         t, o = acts.task(target_task), acts.task(other_task)
@@ -291,6 +293,35 @@ def eval_home(lines: list[LogLine], events: list[ProbeEvent], snap, home_side: s
     if not _ev(events, task=target_task, name="onStop"):
         v.note("no onStop from the minimized task %d within the settle time" % target_task)
     v.merge(check_placement(snap, other_task, other(home_side), geo))
+    v.merge(eval_input_ok(snap, other_task, other(home_side), geo))
+    return v
+
+
+def eval_input_ok(snap, task_id: int, side: str, geo: Geometry = DUO1) -> Verdict:
+    """The task's on-screen window takes touches where its panel is: the input dispatcher lists it touchable with
+    its panel as frame (no leftover animation transform, not dropped from input). A WM-visible window that the
+    input dispatcher does not route to is the 'other panel unusable' failure."""
+    v = Verdict()
+    ww = _snap(lambda: snap.windows, v, "window windows")
+    inp = _snap(lambda: snap.input, v, "input")
+    if ww is None or inp is None:
+        return v
+    wins = [w for w in ww.values() if w.task_id == task_id and w.on_screen]
+    if not wins:
+        return v.incomplete("no on-screen window of task %d" % task_id)
+    want = geo.panel(side)
+    for w in wins:
+        handles = [iw for iw in inp.windows if iw.hash == w.hash]
+        if not handles:
+            v.incomplete("window %s of task %d not in the input dump" % (w.hash, task_id))
+            continue
+        iw = handles[0]
+        if not iw.touchable:
+            v.fail("task %d window %s is on screen but not touchable (%s): its panel lost input"
+                   % (task_id, w.hash, "|".join(sorted(iw.flags))))
+        elif iw.frame != want:
+            v.fail("task %d input frame %s, expected its panel %s (transformed, e.g. a stuck animation)"
+                   % (task_id, iw.frame, want))
     return v
 
 
@@ -309,8 +340,13 @@ def eval_back(events: list[ProbeEvent], snap, back_side: str, target_task: int, 
             v.incomplete("task %d paused but did not stop (gesture cancelled?)" % target_task)
         elif v.ok:
             v.incomplete("no lifecycle change on either panel: the Back gesture was not recognized")
+        # a gesture that neither committed nor cancelled cleanly leaves the task transformed or without input
+        tv = eval_input_ok(snap, target_task, back_side, geo)
+        if tv.status == FAIL:
+            v.merge(tv)
     v.merge(check_placement(snap, other_task, other(back_side), geo))
     v.merge(check_not_policy_hidden(snap, other_task))
+    v.merge(eval_input_ok(snap, other_task, other(back_side), geo))
     return v
 
 
@@ -423,9 +459,11 @@ def eval_ime_rotated(events: list[ProbeEvent], snap, target_task: int, other_tas
     if ta.bounds.intersects(oa.bounds):
         v.fail("panel areas overlap after rotation: %s %s" % (ta.bounds, oa.bounds))
     ins = _ev(events, task=target_task, name="insets")
-    if not ins or not _insets_ime(ins[-1])[0]:
-        return v.incomplete("keyboard not up for task %d after rotation (probe relaunched without configChanges)"
-                            % target_task)
+    vis, rect = _insets_ime(ins[-1]) if ins else (False, None)
+    if not vis or rect is None or rect.bottom <= 0:
+        # the editor tap is proven by eval_touch; a keyboard that does not come up is the same failure as in eval_ime
+        return v.fail("keyboard not shown for task %d after one tap on its editor in the rotated layout (last "
+                      "insets: %s)" % (target_task, ins[-1].kv if ins else None))
     ime = c.ime_container()
     if ime is None:
         return v.incomplete("ImeContainer missing")

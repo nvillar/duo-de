@@ -37,6 +37,9 @@ class Task:
         self.tid, self.cls, self.area, self.hidden = tid, cls, area, hidden
         self.act = "%s@%x" % (cls, 0x1000 + tid)
         self.stopped = False
+        self.scroll = 0                 # content scrolled up by this many px
+        self.no_input = False           # window dropped from input (stuck cross-task Back)
+        self.input_frame = None         # input frame left transformed (stuck predictive Back preview)
 
     @property
     def bounds(self) -> Rect:
@@ -193,12 +196,12 @@ def inputdump(tasks: list[Task], focus: Task | None, keyguard: bool = False, tou
             "touchableRegion=[0,0][2784,1800], ownerPid=4003, ownerUid=10178"
             % ("TRUSTED_OVERLAY" if keyguard else "NOT_TOUCHABLE | TRUSTED_OVERLAY")]
     for i, t in enumerate(tasks):
-        hidden = (t.hidden & 8 or t.stopped or keyguard) and t.tid != touchable_leak
+        hidden = (t.hidden & 8 or t.stopped or keyguard or t.no_input) and t.tid != touchable_leak
         out.append("      %d: name=%s org.duode.probe/org.duode.probe.%s, id=%d, displayId=0, inputConfig=%s, alpha=1, "
                    "frame=%s, globalScale=1, applicationInfo.name=, applicationInfo.token=<null>, "
                    "touchableRegion=%s, ownerPid=5000, ownerUid=10190"
                    % (i + 1, t.win, t.cls, 900 + i, "NOT_VISIBLE | NOT_TOUCHABLE" if hidden else "DUPLICATE_TOUCH_TO_WALLPAPER",
-                      r(t.bounds), r(t.bounds)))
+                      r(t.input_frame or t.bounds), r(t.input_frame or t.bounds)))
     return "\n".join(out) + "\n"
 
 
@@ -261,6 +264,11 @@ def launch(side: str, key: str, display_id: str = "unset") -> str:
 
 def targets_for(task: Task) -> str:
     b = task.bounds
+    if task.scroll:
+        s = task.scroll
+        return probe("targets", task, "title=[%d,%d][%d,%d] editor1=[%d,%d][%d,%d] editor2=[%d,%d][%d,%d]"
+                     % (b.left + 40, 260 - s, b.right - 40, 341 - s, b.left + 40, 798 - s, b.right - 40, 911 - s,
+                        b.left + 40, 911 - s, b.right - 40, 1130 - s))
     return probe("targets", task, "title=[%d,260][%d,341] editor1=[%d,798][%d,911] editor2=[%d,911][%d,1130] "
                  "showIme=[%d,1130][%d,1270] hideIme=[%d,1270][%d,1410]"
                  % ((b.left + 40, b.right - 40) * 5))
@@ -320,6 +328,7 @@ class Sim:
                  for k in ("persist.sys.phh.duo.panels", "persist.debug.phh.duo.panels"))
         self.props["sys.duode.panels.active"] = "1" if on else "0"
         self.props["sys.boot_completed"] = "1"
+        self.keyguard = "no_boot_keyguard" not in self.bugs
 
     def task_at(self, side):
         live = [t for t in self.tasks if t.area == side and not t.hidden & 8 and not t.stopped]
@@ -339,6 +348,11 @@ class Sim:
     def tap(self, x, y):
         side = "A" if x < 1350 else ("B" if x >= 1434 else None)
         top = self.task_at(side) if side else None
+        if top is not None and top.no_input:
+            # the window is not in input: the spanning probe HOME underneath gets the touch
+            self.emit(probe("touch", HOME_TASK, "action=down x=%d y=%d rawX=%d rawY=%d pointers=1" % (x, y, x, y),
+                            act="ProbeHomeActivity@77"))
+            return
         if top is not None:
             receiver = top
             if "touch_to_other" in self.bugs:
@@ -360,7 +374,7 @@ class Sim:
         self.emit(launch(bside, key, "0" if self.toggle else "unset"))
         if "no_resume" in self.bugs:
             return
-        dest = bside
+        dest = bside if self.props.get("sys.duode.panels.active") == "1" else "default"
         if "wrong_panel" in self.bugs:
             dest = "B" if bside == "A" else "A"
         existing = [t for t in self.tasks if t.cls == cls] if key != "probeTestNew" else []
@@ -404,6 +418,17 @@ class Sim:
         t = self.task_at(side)
         if t is None:
             return
+        if "stuck_back" in self.bugs:
+            # the hardware run: preview starts (pilfer, scaled leash), never commits or cancels; the other
+            # panel's task is taken as the cross-task target and loses input
+            self.emit(probe("touch", t, "action=cancel x=59 y=900 rawX=59 rawY=900 pointers=1"))
+            p = PANEL[t.area]
+            t.input_frame = Rect(p.left + p.width // 10, p.top + p.height // 10, p.right - p.width // 10,
+                                 p.bottom - p.height // 10)
+            o = self.task_at("B" if t.area == "A" else "A")
+            if o is not None:
+                o.no_input = True
+            return
         if "back_to_focused" in self.bugs and self.focus is not None:
             t = self.focus
         t.stopped = True
@@ -438,6 +463,12 @@ class Sim:
             if y1 > 1700 and y2 < y1:
                 if "synthetic_home_ignored" not in self.bugs:
                     self.home(side)
+            elif abs(y2 - y1) > abs(x2 - x1) and abs(y2 - y1) > 20:
+                t = self.task_at(side if x1 < 1350 or x1 >= 1434 else None)
+                if t is not None:
+                    t.scroll = max(0, t.scroll + (y1 - y2) - (20 if y1 > y2 else -20))
+                    if "scroll_targets" in self.bugs:      # DuoProbe gate-3: targets after a scroll
+                        self.emit(targets_for(t))
             elif abs(x2 - x1) > 300:
                 self.back(side)
             return ""
@@ -502,6 +533,8 @@ class Sim:
             return "Drop box contents: 0 entries\nMax entries: 1000\n"
         if cmd.startswith("rm -f"):
             return ""
+        if cmd in ("dumpsys window", "dumpsys activity service SystemUIService WMShell"):
+            return "SIMULATED %s\n" % cmd
         m = re.match(r"setprop (\S+) (\S+)$", cmd)
         if m:
             if not m.group(1).startswith("persist.sys.") or self.root:
@@ -512,7 +545,7 @@ class Sim:
         if cmd == "cat /data/local/tmp/duogate-ui.xml":
             return self.ui_xml
         if cmd == "dumpsys activity containers":
-            return containers(self.tasks)
+            return containers(self.tasks, panels=self.props.get("sys.duode.panels.active") == "1")
         if cmd == "dumpsys activity activities":
             return activities(self.tasks, keyguard=self.keyguard)
         if cmd == "dumpsys window windows":

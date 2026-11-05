@@ -14,7 +14,7 @@ import time
 from .model import EvidenceError
 from .parsers import LogLine, ProbeEvent, marker_id, parse_log_line, probe_event
 
-KEEP_TAGS = {"DuoGate", "DuoProbe", "DuoDisplayAreaPolicy", "DuoDisplayMask", "POSTURE PROCESSOR"}
+KEEP_TAGS = {"DuoGate", "DuoProbe", "DuoDisplayAreaPolicy", "DuoRecents", "DuoDisplayMask", "POSTURE PROCESSOR"}
 KEEP_LEVELS = {"AndroidRuntime": "EF", "DEBUG": "F", "libc": "F", "ActivityManager": "E", "InputDispatcher": "EW",
                "WindowManager": "E"}
 

@@ -17,6 +17,7 @@ from .model import EvidenceError, Rect
 from .parsers import LogLine, ProbeEvent
 
 KEY_HOME, KEY_BACK, KEY_POWER, KEY_ENTER, KEY_WAKEUP = 3, 4, 26, 66, 224
+SCROLL_SLOP = 24        # ScrollView touch slop (8 dp at 400 dpi = 20 px) plus a margin
 
 DUMPS = {
     "containers": "dumpsys activity containers",
@@ -123,7 +124,9 @@ class Device:
         self.quiet = quiet
         self.screens = screens
         self.geo = geo
+        self.live = live
         self.remove_wait = 1.0
+        self.boot_wait = 10.0
         self.snapdir = os.path.join(outdir, "snaps")
         os.makedirs(self.snapdir, exist_ok=True)
         self.log: LogBuffer = LogBuffer() if not live else self._start_log()
@@ -140,6 +143,9 @@ class Device:
         """After a reboot the logcat process is gone; markers keep their uniqueness across captures. Everything the
         new capture replays happened after the reboot, so it all belongs to the run."""
         self._earlier += self.run_lines()
+        if not self.live:
+            self._run_start = len(self.log.lines) - 1     # offline: keep the buffer, start a new run window
+            return
         self.log.close()
         self.log = self._start_log()
         self._run_start = -1
@@ -273,6 +279,54 @@ class Device:
         if e is None:
             raise EvidenceError("no targets event from task %d (probe older than gate-2?)" % task_id)
         return parsers.parse_targets(e)
+
+    def content_band(self, task_id: int, area: Rect) -> tuple[int, int]:
+        """The vertical band of `area` where the task's content is visible and tappable: below its top bars (status +
+        action bar) and above its bottom bar or the keyboard, from the task's latest insets event."""
+        e = self.log.latest(lambda e: e.event == "insets" and e.task == task_id)
+        top, bottom = 220, 80
+        if e is not None:
+            try:
+                bars = [int(x) for x in e.kv.get("bars", "").strip("[]").split(",")]
+                ime = [int(x) for x in e.kv.get("ime", "").strip("[]").split(",")]
+                top, bottom = bars[1], max(bars[3], ime[3])
+            except (ValueError, IndexError):
+                raise EvidenceError("unparsable insets of task %d: %s" % (task_id, e.kv))
+        return area.top + top, area.bottom - bottom
+
+    def task_point(self, task_id: int, name: str, side: str | None = None, area: Rect | None = None,
+                   attempts: int = 3) -> tuple[int, int]:
+        """A tap point on a task's control that is really visible: inside the panel, below the bars and above the
+        keyboard. A control scrolled away or covered by the keyboard is dragged into view first (a slow drag inside
+        the visible band, so the ScrollView does not fling) and its new position is taken from the probe's targets
+        event (DuoProbe gate-3 reports positions after a scroll; with gate-2 this is INCOMPLETE)."""
+        area = area or self.geo.panel(side)
+        for _ in range(attempts):
+            targets = self.task_targets(task_id)
+            r = targets.get(name)
+            if r is None:
+                raise EvidenceError("target %s unknown" % name)
+            lo, hi = self.content_band(task_id, area)
+            if hi - lo < 120:
+                raise EvidenceError("no visible content band on task %d (%d..%d)" % (task_id, lo, hi))
+            seen = Rect(r.left, max(r.top, lo + 10), r.right, min(r.bottom, hi - 10))
+            if seen.height >= 40 and area.contains_point(*seen.center()):
+                return seen.center()
+            # scroll so that the control's centre lands in the middle of the band
+            delta = (r.top + r.bottom) // 2 - (lo + hi) // 2
+            x = (max(r.left, area.left) + min(r.right, area.right)) // 2
+            dist = min(abs(delta), hi - lo - 80) + SCROLL_SLOP
+            y0 = hi - 30 if delta > 0 else lo + 30
+            y1 = y0 - dist if delta > 0 else y0 + dist
+            before = self.log.latest(lambda e: e.event == "targets" and e.task == task_id)
+            # below the fling threshold: ~80 px/s, at least 1 s
+            st = self.step("scroll.%d.%s" % (task_id, name), lambda: self.swipe(x, y0, x, y1, max(1000, dist * 12)),
+                           snapshot=False, until=lambda evs: any(
+                               e.event == "targets" and e.task == task_id and e.seq > before.seq for e in evs))
+            if not st.settled:
+                raise EvidenceError("target %s of task %d at %s is outside the visible band %d..%d and the probe did "
+                                    "not report a scrolled position (DuoProbe gate-3 needed)" % (name, task_id, r, lo, hi))
+        raise EvidenceError("target %s of task %d not brought into view after %d scrolls" % (name, task_id, attempts))
 
     def point(self, targets: dict[str, Rect], name: str, side: str | None = None,
               area: Rect | None = None) -> tuple[int, int]:

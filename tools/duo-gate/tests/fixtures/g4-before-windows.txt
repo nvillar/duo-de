@@ -1,0 +1,559 @@
+WINDOW MANAGER WINDOWS (dumpsys window windows)
+  Window #0 Window{722fc28 u0 ScreenDecorOverlayBottom}:
+    mDisplayId=0 mSession=Session{b4098dd 4045:u0a10176} mClient=android.os.BinderProxy@67c9f1a
+    mOwnerUid=10176 showForAllUsers=true package=com.android.systemui appop=NONE
+    mAttrs={(0,0)(fillxwrap) gr=BOTTOM CENTER_VERTICAL sim={adjust=pan} layoutInDisplayCutoutMode=always ty=NAVIGATION_BAR_PANEL fmt=TRANSLUCENT
+      fl=NOT_FOCUSABLE NOT_TOUCHABLE NOT_TOUCH_MODAL LAYOUT_IN_SCREEN HARDWARE_ACCELERATED FLAG_SLIPPERY
+      pfl=SHOW_FOR_ALL_USERS NO_MOVE_ANIMATION IS_ROUNDED_CORNERS_OVERLAY COLOR_SPACE_AGNOSTIC FIT_INSETS_CONTROLLED TRUSTED_OVERLAY
+      vsysui=LAYOUT_STABLE
+      bhv=DEFAULT
+      frameRateBoostOnTouch=true
+      dvrrWindowFrameRateHint=true}
+    Requested w=2784 h=60 mLayoutSeq=1526
+    mBaseLayer=251000 mSubLayer=0    mToken=WindowToken{3a5da4b type=2024 android.os.BinderProxy@67c9f1a}
+    mViewVisibility=0x0 mHaveFrame=true mObscured=false
+    mGivenContentInsets=[0,0][0,0] mGivenVisibleInsets=[0,0][0,0]
+    mTouchableInsets=3 mGivenInsetsPending=false
+    touchable region=SkRegion()
+    mFullConfiguration={1.0 ?mcc0mnc [en_US] ldltr sw720dp w1114dp h720dp 400dpi xlrg compactNeeded hdr land night finger -keyb/v/h -nav/h winConfig={ mBounds=Rect(0, 0 - 2784, 1800) mAppBounds=Rect(0, 0 - 2784, 1800) mMaxBounds=Rect(0, 0 - 2784, 1800) mDisplayRotation=ROTATION_0 mWindowingMode=fullscreen mActivityType=undefined mAlwaysOnTop=undefined mRotation=ROTATION_0} s.6 fontWeightAdjustment=0}
+    mLastReportedConfiguration={1.0 ?mcc0mnc [en_US] ldltr sw720dp w1114dp h720dp 400dpi xlrg compactNeeded hdr land night finger -keyb/v/h -nav/h winConfig={ mBounds=Rect(0, 0 - 2784, 1800) mAppBounds=Rect(0, 0 - 2784, 1800) mMaxBounds=Rect(0, 0 - 2784, 1800) mDisplayRotation=ROTATION_0 mWindowingMode=fullscreen mActivityType=undefined mAlwaysOnTop=undefined mRotation=ROTATION_0} s.6 fontWeightAdjustment=0}
+    mHasSurface=true isReadyForDisplay()=true mWindowRemovalAllowed=false
+    Frames: parent=[0,0][2784,1800] display=[0,0][2784,1800] frame=[0,1740][2784,1800] last=[0,1740][2784,1800] insetsChanged=false
+     surface=[0,0][0,0]
+    WindowStateAnimator{490d8e8 ScreenDecorOverlayBottom}:
+      mSurface=Surface(name=ScreenDecorOverlayBottom#80)/@0x5378331
+      Surface: shown=true      mDrawState=HAS_DRAWN       mLastHidden=false
+      mEnterAnimationPending=false
+    isOnScreen=true
+    isVisible=true
+    keepClearAreas: restricted=[], unrestricted=[]
+    mPrepareSyncSeqId=0
+    mBufferSeqId=0
+  Window #1 Window{1c199c2 u0 ScreenDecorOverlay}:
+    mDisplayId=0 mSession=Session{b4098dd 4045:u0a10176} mClient=android.os.BinderProxy@882b036
+    mOwnerUid=10176 showForAllUsers=true package=com.android.systemui appop=NONE
+    mAttrs={(0,0)(fillxwrap) gr=TOP CENTER_VERTICAL sim={adjust=pan} layoutInDisplayCutoutMode=always ty=NAVIGATION_BAR_PANEL fmt=TRANSLUCENT
+      fl=NOT_FOCUSABLE NOT_TOUCHABLE NOT_TOUCH_MODAL LAYOUT_IN_SCREEN HARDWARE_ACCELERATED FLAG_SLIPPERY
+      pfl=SHOW_FOR_ALL_USERS NO_MOVE_ANIMATION IS_ROUNDED_CORNERS_OVERLAY COLOR_SPACE_AGNOSTIC FIT_INSETS_CONTROLLED TRUSTED_OVERLAY
+      vsysui=LAYOUT_STABLE
+      bhv=DEFAULT
+      frameRateBoostOnTouch=true
+      dvrrWindowFrameRateHint=true}
+    Requested w=2784 h=60 mLayoutSeq=1526
+    mBaseLayer=251000 mSubLayer=0    mToken=WindowToken{119ab37 type=2024 android.os.BinderProxy@882b036}
+    mViewVisibility=0x0 mHaveFrame=true mObscured=false
+    mGivenContentInsets=[0,0][0,0] mGivenVisibleInsets=[0,0][0,0]
+    mTouchableInsets=3 mGivenInsetsPending=false
+    touchable region=SkRegion()
+    mFullConfiguration={1.0 ?mcc0mnc [en_US] ldltr sw720dp w1114dp h720dp 400dpi xlrg compactNeeded hdr land night finger -keyb/v/h -nav/h winConfig={ mBounds=Rect(0, 0 - 2784, 1800) mAppBounds=Rect(0, 0 - 2784, 1800) mMaxBounds=Rect(0, 0 - 2784, 1800) mDisplayRotation=ROTATION_0 mWindowingMode=fullscreen mActivityType=undefined mAlwaysOnTop=undefined mRotation=ROTATION_0} s.6 fontWeightAdjustment=0}
+    mLastReportedConfiguration={1.0 ?mcc0mnc [en_US] ldltr sw720dp w1114dp h720dp 400dpi xlrg compactNeeded hdr land night finger -keyb/v/h -nav/h winConfig={ mBounds=Rect(0, 0 - 2784, 1800) mAppBounds=Rect(0, 0 - 2784, 1800) mMaxBounds=Rect(0, 0 - 2784, 1800) mDisplayRotation=ROTATION_0 mWindowingMode=fullscreen mActivityType=undefined mAlwaysOnTop=undefined mRotation=ROTATION_0} s.6 fontWeightAdjustment=0}
+    mHasSurface=true isReadyForDisplay()=true mWindowRemovalAllowed=false
+    Frames: parent=[0,0][2784,1800] display=[0,0][2784,1800] frame=[0,0][2784,60] last=[0,0][2784,60] insetsChanged=false
+     surface=[0,0][0,0]
+    WindowStateAnimator{62320b ScreenDecorOverlay}:
+      mSurface=Surface(name=ScreenDecorOverlay#79)/@0xb81fa16
+      Surface: shown=true      mDrawState=HAS_DRAWN       mLastHidden=false
+      mEnterAnimationPending=false
+    isOnScreen=true
+    isVisible=true
+    keepClearAreas: restricted=[], unrestricted=[]
+    mPrepareSyncSeqId=0
+    mBufferSeqId=0
+  Window #2 Window{4cf63bb u0 EdgeBackGestureHandler0}:
+    mDisplayId=0 mSession=Session{b4098dd 4045:u0a10176} mClient=android.os.BinderProxy@837c7fd
+    mOwnerUid=10176 showForAllUsers=true package=com.android.systemui appop=NONE
+    mAttrs={(0,0)(263x670) sim={adjust=pan} ty=NAVIGATION_BAR_PANEL fmt=TRANSLUCENT
+      fl=NOT_FOCUSABLE NOT_TOUCHABLE LAYOUT_IN_SCREEN HARDWARE_ACCELERATED
+      pfl=SHOW_FOR_ALL_USERS EXCLUDE_FROM_SCREEN_MAGNIFICATION FIT_INSETS_CONTROLLED TRUSTED_OVERLAY
+      bhv=DEFAULT
+      frameRateBoostOnTouch=true
+      dvrrWindowFrameRateHint=true}
+    Requested w=-1 h=-1 mLayoutSeq=26
+    mBaseLayer=251000 mSubLayer=0    mToken=WindowToken{9254f43 type=2024 android.os.BinderProxy@837c7fd}
+    mViewVisibility=0x8 mHaveFrame=true mObscured=false
+    mGivenContentInsets=[0,0][0,0] mGivenVisibleInsets=[0,0][0,0]
+    mFullConfiguration={1.0 ?mcc0mnc [en_US] ldltr sw720dp w1114dp h720dp 400dpi xlrg compactNeeded hdr land night finger -keyb/v/h -nav/h winConfig={ mBounds=Rect(0, 0 - 2784, 1800) mAppBounds=Rect(0, 0 - 2784, 1800) mMaxBounds=Rect(0, 0 - 2784, 1800) mDisplayRotation=ROTATION_0 mWindowingMode=fullscreen mActivityType=undefined mAlwaysOnTop=undefined mRotation=ROTATION_0} s.6 fontWeightAdjustment=0}
+    mLastReportedConfiguration={0.0 ?mcc0mnc ?localeList ?layoutDir ?swdp ?wdp ?hdp ?density ?lsize ?long ?round ?ldr ?wideColorGamut ?orien ?uimode ?night ?touch ?keyb/?/? ?nav/? winConfig={ mBounds=Rect(0, 0 - 0, 0) mAppBounds=null mMaxBounds=Rect(0, 0 - 0, 0) mDisplayRotation=undefined mWindowingMode=undefined mActivityType=undefined mAlwaysOnTop=undefined mRotation=undefined} ?fontWeightAdjustment}
+    mHasSurface=false isReadyForDisplay()=false mWindowRemovalAllowed=false
+    Frames: parent=[0,0][2784,1800] display=[0,0][2784,1800] frame=[1260,565][1523,1235] last=[1260,565][1523,1235] insetsChanged=false
+     surface=[0,0][0,0]
+    WindowStateAnimator{b187dda EdgeBackGestureHandler0}:
+      mDrawState=NO_SURFACE       mLastHidden=false
+      mEnterAnimationPending=false
+      mShownAlpha=0.0 mAlpha=1.0 mLastAlpha=0.0
+    isOnScreen=false
+    isVisible=false
+    keepClearAreas: restricted=[], unrestricted=[]
+    mPrepareSyncSeqId=0
+    mBufferSeqId=0
+  Window #3 Window{c0d04ac u0 Taskbar}:
+    mDisplayId=0 mSession=Session{7a16c84 4587:u0a10183} mClient=android.os.BinderProxy@5e9abbd
+    mOwnerUid=10183 showForAllUsers=true package=com.android.launcher3 appop=NONE
+    mAttrs={(0,0)(fillx393) gr=BOTTOM CENTER_VERTICAL sim={adjust=nothing} layoutInDisplayCutoutMode=always ty=NAVIGATION_BAR fmt=TRANSLUCENT receive insets ignoring z-order
+      fl=NOT_FOCUSABLE NOT_TOUCH_MODAL WATCH_OUTSIDE_TOUCH FLAG_SLIPPERY
+      pfl=NO_MOVE_ANIMATION
+      bhv=DEFAULT
+      providedInsets:
+        InsetsFrameProvider: {id=#e3130001, index=0, type=navigationBars, source=FRAME, flags=[SUPPRESS_SCRIM], insetsSize=Insets{left=0, top=0, right=0, bottom=80}}
+        InsetsFrameProvider: {id=#e3130006, index=0, type=tappableElement, source=FRAME, flags=[], insetsSize=Insets{left=0, top=0, right=0, bottom=0}, insetsSizeOverrides=[TypedInsetsSize: {windowType=VOICE_INTERACTION, insetsSize=Insets{left=0, top=0, right=0, bottom=0}}]}
+        InsetsFrameProvider: {id=#e3130005, index=0, type=mandatorySystemGestures, source=FRAME, flags=[], insetsSize=Insets{left=0, top=0, right=0, bottom=80}}
+        InsetsFrameProvider: {id=#e3130004, index=0, type=systemGestures, source=DISPLAY, flags=[], insetsSize=Insets{left=75, top=0, right=0, bottom=0}}
+        InsetsFrameProvider: {id=#e3130024, index=1, type=systemGestures, source=DISPLAY, flags=[], insetsSize=Insets{left=0, top=0, right=75, bottom=0}}
+      frameRateBoostOnTouch=true
+      dvrrWindowFrameRateHint=true
+      paramsForRotation:
+        ROTATION_0={(0,0)(fillx393) gr=BOTTOM CENTER_VERTICAL sim={adjust=nothing} layoutInDisplayCutoutMode=always ty=NAVIGATION_BAR fmt=TRANSLUCENT receive insets ignoring z-order
+          fl=NOT_FOCUSABLE NOT_TOUCH_MODAL WATCH_OUTSIDE_TOUCH FLAG_SLIPPERY
+          pfl=NO_MOVE_ANIMATION
+          bhv=DEFAULT
+          providedInsets:
+            InsetsFrameProvider: {id=#10d40001, index=0, type=navigationBars, source=FRAME, flags=[SUPPRESS_SCRIM|ANIMATE_RESIZING], insetsSize=Insets{left=0, top=0, right=0, bottom=80}}
+            InsetsFrameProvider: {id=#10d40006, index=0, type=tappableElement, source=FRAME, flags=[], insetsSize=Insets{left=0, top=0, right=0, bottom=0}, insetsSizeOverrides=[TypedInsetsSize: {windowType=VOICE_INTERACTION, insetsSize=Insets{left=0, top=0, right=0, bottom=0}}]}
+            InsetsFrameProvider: {id=#10d40005, index=0, type=mandatorySystemGestures, source=FRAME, flags=[], insetsSize=Insets{left=0, top=0, right=0, bottom=80}}
+            InsetsFrameProvider: {id=#10d40004, index=0, type=systemGestures, source=DISPLAY, flags=[], insetsSize=Insets{left=75, top=0, right=0, bottom=0}}
+            InsetsFrameProvider: {id=#10d40024, index=1, type=systemGestures, source=DISPLAY, flags=[], insetsSize=Insets{left=0, top=0, right=75, bottom=0}}
+          frameRateBoostOnTouch=true
+          dvrrWindowFrameRateHint=true}
+        ROTATION_90={(0,0)(fillx393) gr=BOTTOM CENTER_VERTICAL sim={adjust=nothing} layoutInDisplayCutoutMode=always ty=NAVIGATION_BAR fmt=TRANSLUCENT receive insets ignoring z-order
+          fl=NOT_FOCUSABLE NOT_TOUCH_MODAL WATCH_OUTSIDE_TOUCH FLAG_SLIPPERY
+          pfl=NO_MOVE_ANIMATION
+          bhv=DEFAULT
+          providedInsets:
+            InsetsFrameProvider: {id=#10d40001, index=0, type=navigationBars, source=FRAME, flags=[SUPPRESS_SCRIM|ANIMATE_RESIZING], insetsSize=Insets{left=0, top=0, right=0, bottom=80}}
+            InsetsFrameProvider: {id=#10d40006, index=0, type=tappableElement, source=FRAME, flags=[], insetsSize=Insets{left=0, top=0, right=0, bottom=0}, insetsSizeOverrides=[TypedInsetsSize: {windowType=VOICE_INTERACTION, insetsSize=Insets{left=0, top=0, right=0, bottom=0}}]}
+            InsetsFrameProvider: {id=#10d40005, index=0, type=mandatorySystemGestures, source=FRAME, flags=[], insetsSize=Insets{left=0, top=0, right=0, bottom=80}}
+            InsetsFrameProvider: {id=#10d40004, index=0, type=systemGestures, source=DISPLAY, flags=[], insetsSize=Insets{left=75, top=0, right=0, bottom=0}}
+            InsetsFrameProvider: {id=#10d40024, index=1, type=systemGestures, source=DISPLAY, flags=[], insetsSize=Insets{left=0, top=0, right=75, bottom=0}}
+          frameRateBoostOnTouch=true
+          dvrrWindowFrameRateHint=true}
+        ROTATION_180={(0,0)(fillx393) gr=BOTTOM CENTER_VERTICAL sim={adjust=nothing} layoutInDisplayCutoutMode=always ty=NAVIGATION_BAR fmt=TRANSLUCENT receive insets ignoring z-order
+          fl=NOT_FOCUSABLE NOT_TOUCH_MODAL WATCH_OUTSIDE_TOUCH FLAG_SLIPPERY
+          pfl=NO_MOVE_ANIMATION
+          bhv=DEFAULT
+          providedInsets:
+            InsetsFrameProvider: {id=#10d40001, index=0, type=navigationBars, source=FRAME, flags=[SUPPRESS_SCRIM|ANIMATE_RESIZING], insetsSize=Insets{left=0, top=0, right=0, bottom=80}}
+            InsetsFrameProvider: {id=#10d40006, index=0, type=tappableElement, source=FRAME, flags=[], insetsSize=Insets{left=0, top=0, right=0, bottom=0}, insetsSizeOverrides=[TypedInsetsSize: {windowType=VOICE_INTERACTION, insetsSize=Insets{left=0, top=0, right=0, bottom=0}}]}
+            InsetsFrameProvider: {id=#10d40005, index=0, type=mandatorySystemGestures, source=FRAME, flags=[], insetsSize=Insets{left=0, top=0, right=0, bottom=80}}
+            InsetsFrameProvider: {id=#10d40004, index=0, type=systemGestures, source=DISPLAY, flags=[], insetsSize=Insets{left=75, top=0, right=0, bottom=0}}
+            InsetsFrameProvider: {id=#10d40024, index=1, type=systemGestures, source=DISPLAY, flags=[], insetsSize=Insets{left=0, top=0, right=75, bottom=0}}
+          frameRateBoostOnTouch=true
+          dvrrWindowFrameRateHint=true}
+        ROTATION_270={(0,0)(fillx393) gr=BOTTOM CENTER_VERTICAL sim={adjust=nothing} layoutInDisplayCutoutMode=always ty=NAVIGATION_BAR fmt=TRANSLUCENT receive insets ignoring z-order
+          fl=NOT_FOCUSABLE NOT_TOUCH_MODAL WATCH_OUTSIDE_TOUCH FLAG_SLIPPERY
+          pfl=NO_MOVE_ANIMATION
+          bhv=DEFAULT
+          providedInsets:
+            InsetsFrameProvider: {id=#10d40001, index=0, type=navigationBars, source=FRAME, flags=[SUPPRESS_SCRIM|ANIMATE_RESIZING], insetsSize=Insets{left=0, top=0, right=0, bottom=80}}
+            InsetsFrameProvider: {id=#10d40006, index=0, type=tappableElement, source=FRAME, flags=[], insetsSize=Insets{left=0, top=0, right=0, bottom=0}, insetsSizeOverrides=[TypedInsetsSize: {windowType=VOICE_INTERACTION, insetsSize=Insets{left=0, top=0, right=0, bottom=0}}]}
+            InsetsFrameProvider: {id=#10d40005, index=0, type=mandatorySystemGestures, source=FRAME, flags=[], insetsSize=Insets{left=0, top=0, right=0, bottom=80}}
+            InsetsFrameProvider: {id=#10d40004, index=0, type=systemGestures, source=DISPLAY, flags=[], insetsSize=Insets{left=75, top=0, right=0, bottom=0}}
+            InsetsFrameProvider: {id=#10d40024, index=1, type=systemGestures, source=DISPLAY, flags=[], insetsSize=Insets{left=0, top=0, right=75, bottom=0}}
+          frameRateBoostOnTouch=true
+          dvrrWindowFrameRateHint=true}}
+    Requested w=2784 h=393 mLayoutSeq=1526
+    mBaseLayer=241000 mSubLayer=0    mToken=WindowToken{a4113f1 type=2019 android.os.BinderProxy@85500c2}
+    mViewVisibility=0x0 mHaveFrame=true mObscured=false
+    mGivenContentInsets=[0,0][0,0] mGivenVisibleInsets=[0,0][0,0]
+    mTouchableInsets=3 mGivenInsetsPending=false
+    touchable region=SkRegion()
+    mFullConfiguration={1.0 ?mcc0mnc [en_US] ldltr sw720dp w1114dp h720dp 400dpi xlrg compactNeeded hdr land night finger -keyb/v/h -nav/h winConfig={ mBounds=Rect(0, 0 - 2784, 1800) mAppBounds=Rect(0, 0 - 2784, 1800) mMaxBounds=Rect(0, 0 - 2784, 1800) mDisplayRotation=ROTATION_0 mWindowingMode=fullscreen mActivityType=undefined mAlwaysOnTop=undefined mRotation=ROTATION_0} s.6 fontWeightAdjustment=0}
+    mLastReportedConfiguration={1.0 ?mcc0mnc [en_US] ldltr sw720dp w1114dp h720dp 400dpi xlrg compactNeeded hdr land night finger -keyb/v/h -nav/h winConfig={ mBounds=Rect(0, 0 - 2784, 1800) mAppBounds=Rect(0, 0 - 2784, 1800) mMaxBounds=Rect(0, 0 - 2784, 1800) mDisplayRotation=ROTATION_0 mWindowingMode=fullscreen mActivityType=undefined mAlwaysOnTop=undefined mRotation=ROTATION_0} s.6 fontWeightAdjustment=0}
+    mHasSurface=true isReadyForDisplay()=true mWindowRemovalAllowed=false
+    Frames: parent=[0,0][2784,1800] display=[0,0][2784,1800] frame=[0,1407][2784,1800] last=[0,1407][2784,1800] insetsChanged=false
+     surface=[0,0][0,0]
+    ContainerAnimator:
+      mLeash=Surface(name=Surface(name=c0d04ac Taskbar#82)/@0x937228b - animation-leash of insets_animation#1477)/@0x61a2264 mAnimationType=insets_animation
+      Animation: com.android.server.wm.InsetsSourceProvider$ControlAdapter@b8900d0
+        ControlAdapter mCapturedLeash=Surface(name=Surface(name=c0d04ac Taskbar#82)/@0x937228b - animation-leash of insets_animation#1477)/@0x61a2264
+    WindowStateAnimator{7326b85 Taskbar}:
+      mSurface=Surface(name=Taskbar#84)/@0xa88e584
+      Surface: shown=true      mDrawState=HAS_DRAWN       mLastHidden=false
+      mEnterAnimationPending=false
+    isOnScreen=true
+    isVisible=true
+    keepClearAreas: restricted=[], unrestricted=[]
+    mPrepareSyncSeqId=0
+    mBufferSeqId=0
+  Window #4 Window{f5a313 u0 NotificationShade}:
+    mDisplayId=0 mSession=Session{b4098dd 4045:u0a10176} mClient=android.os.BinderProxy@456e34d
+    mOwnerUid=10176 showForAllUsers=true package=com.android.systemui appop=NONE
+    mAttrs={(0,0)(fillxfill) gr=TOP CENTER_VERTICAL sim={adjust=pan} layoutInDisplayCutoutMode=always ty=NOTIFICATION_SHADE fmt=TRANSLUCENT
+      fl=NOT_FOCUSABLE TOUCHABLE_WHEN_WAKING WATCH_OUTSIDE_TOUCH HARDWARE_ACCELERATED DRAWS_SYSTEM_BAR_BACKGROUNDS
+      pfl=OPTIMIZE_MEASURE COLOR_SPACE_AGNOSTIC FIT_INSETS_CONTROLLED
+      bhv=SHOW_TRANSIENT_BARS_BY_SWIPE
+      frameRateBoostOnTouch=true
+      dvrrWindowFrameRateHint=true}
+    Requested w=2784 h=1800 mLayoutSeq=53
+    mBaseLayer=171000 mSubLayer=0    mToken=WindowToken{cce6e02 type=2040 android.os.BinderProxy@e0c02e4}
+    mViewVisibility=0x4 mHaveFrame=true mObscured=false
+    mGivenContentInsets=[0,0][0,0] mGivenVisibleInsets=[0,0][0,0]
+    mFullConfiguration={1.0 ?mcc0mnc [en_US] ldltr sw720dp w1114dp h720dp 400dpi xlrg compactNeeded hdr land night finger -keyb/v/h -nav/h winConfig={ mBounds=Rect(0, 0 - 2784, 1800) mAppBounds=Rect(0, 0 - 2784, 1800) mMaxBounds=Rect(0, 0 - 2784, 1800) mDisplayRotation=ROTATION_0 mWindowingMode=fullscreen mActivityType=undefined mAlwaysOnTop=undefined mRotation=ROTATION_0} s.6 fontWeightAdjustment=0}
+    mLastReportedConfiguration={1.0 ?mcc0mnc [en_US] ldltr sw720dp w1114dp h720dp 400dpi xlrg compactNeeded hdr land night finger -keyb/v/h -nav/h winConfig={ mBounds=Rect(0, 0 - 2784, 1800) mAppBounds=Rect(0, 0 - 2784, 1800) mMaxBounds=Rect(0, 0 - 2784, 1800) mDisplayRotation=ROTATION_0 mWindowingMode=fullscreen mActivityType=undefined mAlwaysOnTop=undefined mRotation=ROTATION_0} s.6 fontWeightAdjustment=0}
+    mHasSurface=false isReadyForDisplay()=false mWindowRemovalAllowed=false
+    Frames: parent=[0,0][2784,1800] display=[0,0][2784,1800] frame=[0,0][2784,1800] last=[0,0][2784,1800] insetsChanged=false
+     surface=[0,0][0,0]
+    WindowStateAnimator{52c28fc NotificationShade}:
+      mDrawState=NO_SURFACE       mLastHidden=false
+      mEnterAnimationPending=false
+    isOnScreen=false
+    isVisible=false
+    keepClearAreas: restricted=[], unrestricted=[]
+    mPrepareSyncSeqId=0
+    mBufferSeqId=0
+  Window #5 Window{a3c618b u0 StatusBar}:
+    mDisplayId=0 mSession=Session{b4098dd 4045:u0a10176} mClient=android.os.BinderProxy@8b9684e
+    mOwnerUid=10176 showForAllUsers=true package=com.android.systemui appop=NONE
+    mAttrs={(0,0)(fillx60) gr=TOP CENTER_VERTICAL sim={adjust=pan} layoutInDisplayCutoutMode=always ty=STATUS_BAR fmt=TRANSLUCENT
+      fl=NOT_FOCUSABLE HARDWARE_ACCELERATED DRAWS_SYSTEM_BAR_BACKGROUNDS
+      pfl=COLOR_SPACE_AGNOSTIC FIT_INSETS_CONTROLLED
+      bhv=DEFAULT
+      providedInsets:
+        InsetsFrameProvider: {id=#c84c0000, index=0, type=statusBars, source=FRAME, flags=[], insetsSize=Insets{left=0, top=60, right=0, bottom=0}}
+        InsetsFrameProvider: {id=#c84c0006, index=0, type=tappableElement, source=FRAME, flags=[], insetsSize=Insets{left=0, top=60, right=0, bottom=0}}
+        InsetsFrameProvider: {id=#c84c0005, index=0, type=mandatorySystemGestures, source=FRAME, flags=[], mMinimalInsetsSizeInDisplayCutoutSafe=Insets{left=0, top=30, right=0, bottom=0}}
+      frameRateBoostOnTouch=true
+      dvrrWindowFrameRateHint=true
+      paramsForRotation:
+        ROTATION_0={(0,0)(fillx60) gr=TOP CENTER_VERTICAL layoutInDisplayCutoutMode=always ty=STATUS_BAR fmt=TRANSLUCENT
+          fl=NOT_FOCUSABLE DRAWS_SYSTEM_BAR_BACKGROUNDS
+          pfl=COLOR_SPACE_AGNOSTIC FIT_INSETS_CONTROLLED
+          bhv=DEFAULT
+          providedInsets:
+            InsetsFrameProvider: {id=#c84c0000, index=0, type=statusBars, source=FRAME, flags=[], insetsSize=Insets{left=0, top=60, right=0, bottom=0}}
+            InsetsFrameProvider: {id=#c84c0006, index=0, type=tappableElement, source=FRAME, flags=[], insetsSize=Insets{left=0, top=60, right=0, bottom=0}}
+            InsetsFrameProvider: {id=#c84c0005, index=0, type=mandatorySystemGestures, source=FRAME, flags=[], insetsSize=Insets{left=0, top=60, right=0, bottom=0}, mMinimalInsetsSizeInDisplayCutoutSafe=Insets{left=0, top=30, right=0, bottom=0}}
+          frameRateBoostOnTouch=true
+          dvrrWindowFrameRateHint=true}
+        ROTATION_90={(0,0)(fillx60) gr=TOP CENTER_VERTICAL layoutInDisplayCutoutMode=always ty=STATUS_BAR fmt=TRANSLUCENT
+          fl=NOT_FOCUSABLE DRAWS_SYSTEM_BAR_BACKGROUNDS
+          pfl=COLOR_SPACE_AGNOSTIC FIT_INSETS_CONTROLLED
+          bhv=DEFAULT
+          providedInsets:
+            InsetsFrameProvider: {id=#c84c0000, index=0, type=statusBars, source=FRAME, flags=[], insetsSize=Insets{left=0, top=60, right=0, bottom=0}}
+            InsetsFrameProvider: {id=#c84c0006, index=0, type=tappableElement, source=FRAME, flags=[], insetsSize=Insets{left=0, top=60, right=0, bottom=0}}
+            InsetsFrameProvider: {id=#c84c0005, index=0, type=mandatorySystemGestures, source=FRAME, flags=[], insetsSize=Insets{left=0, top=60, right=0, bottom=0}, mMinimalInsetsSizeInDisplayCutoutSafe=Insets{left=0, top=30, right=0, bottom=0}}
+          frameRateBoostOnTouch=true
+          dvrrWindowFrameRateHint=true}
+        ROTATION_180={(0,0)(fillx60) gr=TOP CENTER_VERTICAL layoutInDisplayCutoutMode=always ty=STATUS_BAR fmt=TRANSLUCENT
+          fl=NOT_FOCUSABLE DRAWS_SYSTEM_BAR_BACKGROUNDS
+          pfl=COLOR_SPACE_AGNOSTIC FIT_INSETS_CONTROLLED
+          bhv=DEFAULT
+          providedInsets:
+            InsetsFrameProvider: {id=#c84c0000, index=0, type=statusBars, source=FRAME, flags=[], insetsSize=Insets{left=0, top=60, right=0, bottom=0}}
+            InsetsFrameProvider: {id=#c84c0006, index=0, type=tappableElement, source=FRAME, flags=[], insetsSize=Insets{left=0, top=60, right=0, bottom=0}}
+            InsetsFrameProvider: {id=#c84c0005, index=0, type=mandatorySystemGestures, source=FRAME, flags=[], insetsSize=Insets{left=0, top=60, right=0, bottom=0}, mMinimalInsetsSizeInDisplayCutoutSafe=Insets{left=0, top=30, right=0, bottom=0}}
+          frameRateBoostOnTouch=true
+          dvrrWindowFrameRateHint=true}
+        ROTATION_270={(0,0)(fillx60) gr=TOP CENTER_VERTICAL layoutInDisplayCutoutMode=always ty=STATUS_BAR fmt=TRANSLUCENT
+          fl=NOT_FOCUSABLE DRAWS_SYSTEM_BAR_BACKGROUNDS
+          pfl=COLOR_SPACE_AGNOSTIC FIT_INSETS_CONTROLLED
+          bhv=DEFAULT
+          providedInsets:
+            InsetsFrameProvider: {id=#c84c0000, index=0, type=statusBars, source=FRAME, flags=[], insetsSize=Insets{left=0, top=60, right=0, bottom=0}}
+            InsetsFrameProvider: {id=#c84c0006, index=0, type=tappableElement, source=FRAME, flags=[], insetsSize=Insets{left=0, top=60, right=0, bottom=0}}
+            InsetsFrameProvider: {id=#c84c0005, index=0, type=mandatorySystemGestures, source=FRAME, flags=[], insetsSize=Insets{left=0, top=60, right=0, bottom=0}, mMinimalInsetsSizeInDisplayCutoutSafe=Insets{left=0, top=30, right=0, bottom=0}}
+          frameRateBoostOnTouch=true
+          dvrrWindowFrameRateHint=true}}
+    Requested w=2784 h=60 mLayoutSeq=1526
+    mBaseLayer=151000 mSubLayer=0    mToken=WindowToken{f0d5d6f type=2000 android.os.BinderProxy@4bb6749}
+    mViewVisibility=0x0 mHaveFrame=true mObscured=false
+    mGivenContentInsets=[0,0][0,0] mGivenVisibleInsets=[0,0][0,0]
+    mFullConfiguration={1.0 ?mcc0mnc [en_US] ldltr sw720dp w1114dp h720dp 400dpi xlrg compactNeeded hdr land night finger -keyb/v/h -nav/h winConfig={ mBounds=Rect(0, 0 - 2784, 1800) mAppBounds=Rect(0, 0 - 2784, 1800) mMaxBounds=Rect(0, 0 - 2784, 1800) mDisplayRotation=ROTATION_0 mWindowingMode=fullscreen mActivityType=undefined mAlwaysOnTop=undefined mRotation=ROTATION_0} s.6 fontWeightAdjustment=0}
+    mLastReportedConfiguration={1.0 ?mcc0mnc [en_US] ldltr sw720dp w1114dp h720dp 400dpi xlrg compactNeeded hdr land night finger -keyb/v/h -nav/h winConfig={ mBounds=Rect(0, 0 - 2784, 1800) mAppBounds=Rect(0, 0 - 2784, 1800) mMaxBounds=Rect(0, 0 - 2784, 1800) mDisplayRotation=ROTATION_0 mWindowingMode=fullscreen mActivityType=undefined mAlwaysOnTop=undefined mRotation=ROTATION_0} s.6 fontWeightAdjustment=0}
+    mHasSurface=true isReadyForDisplay()=true mWindowRemovalAllowed=false
+    Frames: parent=[0,0][2784,1800] display=[0,0][2784,1800] frame=[0,0][2784,60] last=[0,0][2784,60] insetsChanged=false
+     surface=[0,0][0,0]
+    ContainerAnimator:
+      mLeash=Surface(name=Surface(name=a3c618b StatusBar#93)/@0xa6c8765 - animation-leash of insets_animation#1478)/@0xcf34ccd mAnimationType=insets_animation
+      Animation: com.android.server.wm.InsetsSourceProvider$ControlAdapter@874e8c9
+        ControlAdapter mCapturedLeash=Surface(name=Surface(name=a3c618b StatusBar#93)/@0xa6c8765 - animation-leash of insets_animation#1478)/@0xcf34ccd
+    WindowStateAnimator{69f25ef StatusBar}:
+      mSurface=Surface(name=StatusBar#98)/@0x59ba1a2
+      Surface: shown=true      mDrawState=HAS_DRAWN       mLastHidden=false
+      mEnterAnimationPending=false
+    isOnScreen=true
+    isVisible=true
+    keepClearAreas: restricted=[], unrestricted=[]
+    mPrepareSyncSeqId=0
+    mBufferSeqId=0
+  Window #6 Window{994eb7a u0 ShellDropTarget}:
+    mDisplayId=0 mSession=Session{b4098dd 4045:u0a10176} mClient=android.os.BinderProxy@dac8a3
+    mOwnerUid=10176 showForAllUsers=true package=com.android.systemui appop=SYSTEM_ALERT_WINDOW
+    mAttrs={(0,0)(fillxfill) sim={adjust=pan} layoutInDisplayCutoutMode=always ty=APPLICATION_OVERLAY fmt=TRANSLUCENT
+      fl=NOT_FOCUSABLE HARDWARE_ACCELERATED
+      pfl=SHOW_FOR_ALL_USERS NO_MOVE_ANIMATION FIT_INSETS_CONTROLLED INTERCEPT_GLOBAL_DRAG_AND_DROP
+      bhv=DEFAULT
+      frameRateBoostOnTouch=true
+      dvrrWindowFrameRateHint=true}
+    Requested w=2784 h=1800 mLayoutSeq=6
+    mBaseLayer=111000 mSubLayer=0    mToken=WindowToken{75b47a0 type=2038 android.os.BinderProxy@f49e07c}
+    mViewVisibility=0x4 mHaveFrame=true mObscured=false
+    mGivenContentInsets=[0,0][0,0] mGivenVisibleInsets=[0,0][0,0]
+    mFullConfiguration={1.0 ?mcc0mnc [en_US] ldltr sw720dp w1114dp h720dp 400dpi xlrg compactNeeded hdr land night finger -keyb/v/h -nav/h winConfig={ mBounds=Rect(0, 0 - 2784, 1800) mAppBounds=Rect(0, 0 - 2784, 1800) mMaxBounds=Rect(0, 0 - 2784, 1800) mDisplayRotation=ROTATION_0 mWindowingMode=fullscreen mActivityType=undefined mAlwaysOnTop=undefined mRotation=ROTATION_0} s.6 fontWeightAdjustment=0}
+    mLastReportedConfiguration={0.0 ?mcc0mnc ?localeList ?layoutDir ?swdp ?wdp ?hdp ?density ?lsize ?long ?round ?ldr ?wideColorGamut ?orien ?uimode ?night ?touch ?keyb/?/? ?nav/? winConfig={ mBounds=Rect(0, 0 - 0, 0) mAppBounds=null mMaxBounds=Rect(0, 0 - 0, 0) mDisplayRotation=undefined mWindowingMode=undefined mActivityType=undefined mAlwaysOnTop=undefined mRotation=undefined} ?fontWeightAdjustment}
+    mHasSurface=false isReadyForDisplay()=false mWindowRemovalAllowed=false
+    Frames: parent=[0,0][2784,1800] display=[0,0][2784,1800] frame=[0,0][2784,1800] last=[0,0][2784,1800] insetsChanged=false
+     surface=[0,0][0,0]
+    WindowStateAnimator{ccb02ce ShellDropTarget}:
+      mDrawState=NO_SURFACE       mLastHidden=false
+      mEnterAnimationPending=false
+      mShownAlpha=0.0 mAlpha=1.0 mLastAlpha=0.0
+    isOnScreen=false
+    isVisible=false
+    keepClearAreas: restricted=[], unrestricted=[]
+    mPrepareSyncSeqId=0
+    mBufferSeqId=0
+  Window #7 Window{98a1ab u0 InputMethod}:
+    mDisplayId=0 mSession=Session{3d67f33 5767:u0a10166} mClient=android.os.BinderProxy@3aa67fa
+    mOwnerUid=10166 showForAllUsers=false package=com.android.inputmethod.latin appop=NONE
+    mAttrs={(0,0)(wrapxwrap) gr=BOTTOM CENTER_VERTICAL sim={adjust=pan forwardNavigation} ty=INPUT_METHOD fmt=TRANSPARENT wanim=0x1030056 receive insets ignoring z-order
+      fl=NOT_FOCUSABLE LAYOUT_IN_SCREEN SPLIT_TOUCH HARDWARE_ACCELERATED DRAWS_SYSTEM_BAR_BACKGROUNDS
+      pfl=FIT_INSETS_CONTROLLED
+      bhv=DEFAULT
+      fitTypes=statusBars navigationBars
+      fitSides=LEFT TOP RIGHT
+      frameRateBoostOnTouch=true
+      dvrrWindowFrameRateHint=true}
+    Requested w=1450 h=140 mLayoutSeq=56
+    mIsImWindow=true mIsWallpaper=false mIsFloatingLayer=true
+    mBaseLayer=131000 mSubLayer=0    mToken=WindowToken{ef94d8c type=2011 android.os.Binder@12ec2bf}
+    mViewVisibility=0x8 mHaveFrame=true mObscured=false
+    mGivenContentInsets=[0,0][0,0] mGivenVisibleInsets=[0,0][0,0]
+    mTouchableInsets=3 mGivenInsetsPending=false
+    touchable region=SkRegion((667,1660,2117,1800))
+    mFullConfiguration={1.0 ?mcc0mnc [en_US] ldltr sw720dp w540dp h664dp 400dpi xlrg compactNeeded hdr port night finger -keyb/v/h -nav/h winConfig={ mBounds=Rect(1434, 0 - 2784, 1800) mAppBounds=Rect(1434, 0 - 2784, 1720) mMaxBounds=Rect(1434, 0 - 2784, 1800) mDisplayRotation=ROTATION_0 mWindowingMode=fullscreen mActivityType=undefined mAlwaysOnTop=undefined mRotation=ROTATION_0} s.6 fontWeightAdjustment=0}
+    mLastReportedConfiguration={0.0 ?mcc0mnc ?localeList ?layoutDir ?swdp ?wdp ?hdp ?density ?lsize ?long ?round ?ldr ?wideColorGamut ?orien ?uimode ?night ?touch ?keyb/?/? ?nav/? winConfig={ mBounds=Rect(0, 0 - 0, 0) mAppBounds=null mMaxBounds=Rect(0, 0 - 0, 0) mDisplayRotation=undefined mWindowingMode=undefined mActivityType=undefined mAlwaysOnTop=undefined mRotation=undefined} ?fontWeightAdjustment}
+    mHasSurface=false isReadyForDisplay()=false mWindowRemovalAllowed=false
+    Frames: parent=[0,60][2784,1800] display=[0,60][2784,1800] frame=[667,1660][2117,1800] last=[667,1660][2117,1800] insetsChanged=false
+     surface=[0,0][0,0]
+    ContainerAnimator:
+      mLeash=Surface(name=Surface(name=98a1ab InputMethod#113)/@0x7ed43a1 - animation-leash of insets_animation#1480)/@0x49d03f7 mAnimationType=insets_animation
+      Animation: com.android.server.wm.InsetsSourceProvider$ControlAdapter@d2a8bce
+        ControlAdapter mCapturedLeash=Surface(name=Surface(name=98a1ab InputMethod#113)/@0x7ed43a1 - animation-leash of insets_animation#1480)/@0x49d03f7
+    WindowStateAnimator{1ccfa7c InputMethod}:
+      mDrawState=NO_SURFACE       mLastHidden=false
+      mEnterAnimationPending=false
+      mShownAlpha=0.0 mAlpha=1.0 mLastAlpha=0.0
+    isOnScreen=false
+    isVisible=false
+    keepClearAreas: restricted=[], unrestricted=[]
+    mPrepareSyncSeqId=0
+    mBufferSeqId=0
+  Window #8 Window{960d37a u0 org.duode.probe/org.duode.probe.ProbeOtherTestActivity}:
+    mDisplayId=0 taskId=51 mSession=Session{e702dce 6547:u0a10215} mClient=android.os.BinderProxy@f613a5
+    mOwnerUid=10215 showForAllUsers=false package=org.duode.probe appop=NONE
+    mAttrs={(0,0)(fillxfill) sim={adjust=resize forwardNavigation} layoutInDisplayCutoutMode=always ty=BASE_APPLICATION wanim=0x103030d
+      fl=LAYOUT_IN_SCREEN LAYOUT_INSET_DECOR SPLIT_TOUCH HARDWARE_ACCELERATED DRAWS_SYSTEM_BAR_BACKGROUNDS
+      pfl=NO_MOVE_ANIMATION EDGE_TO_EDGE_ENFORCED FORCE_DRAW_STATUS_BAR_BACKGROUND FIT_INSETS_CONTROLLED
+      apr=LIGHT_NAVIGATION_BARS FORCE_LIGHT_NAVIGATION_BARS
+      bhv=DEFAULT
+      fitSides=
+      frameRateBoostOnTouch=true
+      dvrrWindowFrameRateHint=true}
+    Requested w=1350 h=1800 mLayoutSeq=1526
+    mBaseLayer=21000 mSubLayer=0    mToken=ActivityRecord{171995798 u0 org.duode.probe/.ProbeOtherTestActivity t51}
+    mActivityRecord=ActivityRecord{171995798 u0 org.duode.probe/.ProbeOtherTestActivity t51}
+    drawnStateEvaluated=true    mightAffectAllDrawn=true
+    mViewVisibility=0x0 mHaveFrame=true mObscured=false
+    mGivenContentInsets=[0,0][0,0] mGivenVisibleInsets=[0,0][0,0]
+    mFullConfiguration={1.0 ?mcc0mnc [en_US] ldltr sw720dp w540dp h720dp 400dpi lrg compactNeeded hdr port night finger -keyb/v/h -nav/h winConfig={ mBounds=Rect(1434, 0 - 2784, 1800) mAppBounds=Rect(1434, 0 - 2784, 1800) mMaxBounds=Rect(1434, 0 - 2784, 1800) mDisplayRotation=ROTATION_0 mWindowingMode=fullscreen mActivityType=standard mAlwaysOnTop=undefined mRotation=ROTATION_0} s.3 fontWeightAdjustment=0}
+    mLastReportedConfiguration={1.0 ?mcc0mnc [en_US] ldltr sw720dp w540dp h720dp 400dpi lrg compactNeeded hdr port night finger -keyb/v/h -nav/h winConfig={ mBounds=Rect(1434, 0 - 2784, 1800) mAppBounds=Rect(1434, 0 - 2784, 1800) mMaxBounds=Rect(1434, 0 - 2784, 1800) mDisplayRotation=ROTATION_0 mWindowingMode=fullscreen mActivityType=standard mAlwaysOnTop=undefined mRotation=ROTATION_0} s.3 fontWeightAdjustment=0}
+    mLastReportedActivityWindowInfo=ActivityWindowInfo{isEmbedded=false, taskBounds=Rect(1434, 0 - 2784, 1800), taskFragmentBounds=Rect(1434, 0 - 2784, 1800)}
+    mHasSurface=true isReadyForDisplay()=true mWindowRemovalAllowed=false
+    Frames: parent=[1434,0][2784,1800] display=[1434,0][2784,1800] frame=[1434,0][2784,1800] last=[1434,0][2784,1800] insetsChanged=false
+     surface=[0,0][0,0]
+    WindowStateAnimator{10a7aef org.duode.probe/org.duode.probe.ProbeOtherTestActivity}:
+      mSurface=Surface(name=org.duode.probe/org.duode.probe.ProbeOtherTestActivity#1474)/@0x6c559fc
+      Surface: shown=true      mDrawState=HAS_DRAWN       mLastHidden=false
+      mEnterAnimationPending=false
+    isOnScreen=true
+    isVisible=true
+    keepClearAreas: restricted=[], unrestricted=[]
+    mPrepareSyncSeqId=0
+    mBufferSeqId=0
+  Window #9 Window{42f0999 u0 org.duode.probe/org.duode.probe.ProbeTestActivity}:
+    mDisplayId=0 taskId=50 mSession=Session{e702dce 6547:u0a10215} mClient=android.os.BinderProxy@e66e2e0
+    mOwnerUid=10215 showForAllUsers=false package=org.duode.probe appop=NONE
+    mAttrs={(0,0)(fillxfill) sim={adjust=resize forwardNavigation} layoutInDisplayCutoutMode=always ty=BASE_APPLICATION wanim=0x103030d
+      fl=LAYOUT_IN_SCREEN LAYOUT_INSET_DECOR SPLIT_TOUCH HARDWARE_ACCELERATED DRAWS_SYSTEM_BAR_BACKGROUNDS
+      pfl=NO_MOVE_ANIMATION EDGE_TO_EDGE_ENFORCED FORCE_DRAW_STATUS_BAR_BACKGROUND FIT_INSETS_CONTROLLED
+      apr=LIGHT_NAVIGATION_BARS FORCE_LIGHT_NAVIGATION_BARS
+      bhv=DEFAULT
+      fitSides=
+      frameRateBoostOnTouch=true
+      dvrrWindowFrameRateHint=true}
+    Requested w=1350 h=1800 mLayoutSeq=1526
+    mBaseLayer=21000 mSubLayer=0    mToken=ActivityRecord{247560677 u0 org.duode.probe/.ProbeTestActivity t50}
+    mActivityRecord=ActivityRecord{247560677 u0 org.duode.probe/.ProbeTestActivity t50}
+    drawnStateEvaluated=true    mightAffectAllDrawn=true
+    mViewVisibility=0x0 mHaveFrame=true mObscured=false
+    mGivenContentInsets=[0,0][0,0] mGivenVisibleInsets=[0,0][0,0]
+    mFullConfiguration={1.0 ?mcc0mnc [en_US] ldltr sw720dp w540dp h720dp 400dpi lrg compactNeeded hdr port night finger -keyb/v/h -nav/h winConfig={ mBounds=Rect(0, 0 - 1350, 1800) mAppBounds=Rect(0, 0 - 1350, 1800) mMaxBounds=Rect(0, 0 - 1350, 1800) mDisplayRotation=ROTATION_0 mWindowingMode=fullscreen mActivityType=standard mAlwaysOnTop=undefined mRotation=ROTATION_0} s.3 fontWeightAdjustment=0}
+    mLastReportedConfiguration={1.0 ?mcc0mnc [en_US] ldltr sw720dp w540dp h720dp 400dpi lrg compactNeeded hdr port night finger -keyb/v/h -nav/h winConfig={ mBounds=Rect(0, 0 - 1350, 1800) mAppBounds=Rect(0, 0 - 1350, 1800) mMaxBounds=Rect(0, 0 - 1350, 1800) mDisplayRotation=ROTATION_0 mWindowingMode=fullscreen mActivityType=standard mAlwaysOnTop=undefined mRotation=ROTATION_0} s.3 fontWeightAdjustment=0}
+    mLastReportedActivityWindowInfo=ActivityWindowInfo{isEmbedded=false, taskBounds=Rect(0, 0 - 1350, 1800), taskFragmentBounds=Rect(0, 0 - 1350, 1800)}
+    mHasSurface=true isReadyForDisplay()=true mWindowRemovalAllowed=false
+    Frames: parent=[0,0][1350,1800] display=[0,0][1350,1800] frame=[0,0][1350,1800] last=[0,0][1350,1800] insetsChanged=false
+     surface=[0,0][0,0]
+    WindowStateAnimator{91d4879 org.duode.probe/org.duode.probe.ProbeTestActivity}:
+      mSurface=Surface(name=org.duode.probe/org.duode.probe.ProbeTestActivity#1459)/@0x422e9be
+      Surface: shown=true      mDrawState=HAS_DRAWN       mLastHidden=false
+      mEnterAnimationPending=false
+    isOnScreen=true
+    isVisible=true
+    keepClearAreas: restricted=[], unrestricted=[]
+    mPrepareSyncSeqId=0
+    mBufferSeqId=0
+  Window #10 Window{3d5710b u0 org.duode.probe/org.duode.probe.ProbeHomeActivity}:
+    mDisplayId=0 taskId=39 mSession=Session{e702dce 6547:u0a10215} mClient=android.os.BinderProxy@96558da
+    mOwnerUid=10215 showForAllUsers=false package=org.duode.probe appop=NONE
+    mAttrs={(0,0)(fillxfill) sim={adjust=pan forwardNavigation} layoutInDisplayCutoutMode=always ty=BASE_APPLICATION wanim=0x103030d
+      fl=LAYOUT_IN_SCREEN LAYOUT_INSET_DECOR SPLIT_TOUCH HARDWARE_ACCELERATED DRAWS_SYSTEM_BAR_BACKGROUNDS
+      pfl=NO_MOVE_ANIMATION EDGE_TO_EDGE_ENFORCED FORCE_DRAW_STATUS_BAR_BACKGROUND FIT_INSETS_CONTROLLED
+      apr=LIGHT_NAVIGATION_BARS FORCE_LIGHT_NAVIGATION_BARS
+      bhv=DEFAULT
+      fitSides=
+      frameRateBoostOnTouch=true
+      dvrrWindowFrameRateHint=true}
+    Requested w=2784 h=1800 mLayoutSeq=1526
+    mBaseLayer=21000 mSubLayer=0    mToken=ActivityRecord{110595910 u0 org.duode.probe/.ProbeHomeActivity t39}
+    mActivityRecord=ActivityRecord{110595910 u0 org.duode.probe/.ProbeHomeActivity t39}
+    drawnStateEvaluated=true    mightAffectAllDrawn=true
+    mViewVisibility=0x0 mHaveFrame=true mObscured=false
+    mGivenContentInsets=[0,0][0,0] mGivenVisibleInsets=[0,0][0,0]
+    mFullConfiguration={1.0 ?mcc0mnc [en_US] ldltr sw720dp w1114dp h720dp 400dpi xlrg compactNeeded hdr land night finger -keyb/v/h -nav/h winConfig={ mBounds=Rect(0, 0 - 2784, 1800) mAppBounds=Rect(0, 0 - 2784, 1800) mMaxBounds=Rect(0, 0 - 2784, 1800) mDisplayRotation=ROTATION_0 mWindowingMode=fullscreen mActivityType=home mAlwaysOnTop=undefined mRotation=ROTATION_0} s.6 fontWeightAdjustment=0}
+    mLastReportedConfiguration={1.0 ?mcc0mnc [en_US] ldltr sw720dp w1114dp h720dp 400dpi xlrg compactNeeded hdr land night finger -keyb/v/h -nav/h winConfig={ mBounds=Rect(0, 0 - 2784, 1800) mAppBounds=Rect(0, 0 - 2784, 1800) mMaxBounds=Rect(0, 0 - 2784, 1800) mDisplayRotation=ROTATION_0 mWindowingMode=fullscreen mActivityType=home mAlwaysOnTop=undefined mRotation=ROTATION_0} s.6 fontWeightAdjustment=0}
+    mLastReportedActivityWindowInfo=ActivityWindowInfo{isEmbedded=false, taskBounds=Rect(0, 0 - 2784, 1800), taskFragmentBounds=Rect(0, 0 - 2784, 1800)}
+    mHasSurface=true isReadyForDisplay()=true mWindowRemovalAllowed=false
+    Frames: parent=[0,0][2784,1800] display=[0,0][2784,1800] frame=[0,0][2784,1800] last=[0,0][2784,1800] insetsChanged=false
+     surface=[0,0][0,0]
+    WindowStateAnimator{b635ee org.duode.probe/org.duode.probe.ProbeHomeActivity}:
+      mSurface=Surface(name=org.duode.probe/org.duode.probe.ProbeHomeActivity#864)/@0xdc1fe5b
+      Surface: shown=true      mDrawState=HAS_DRAWN       mLastHidden=false
+      mEnterAnimationPending=false
+    isOnScreen=true
+    isVisible=true
+    keepClearAreas: restricted=[], unrestricted=[]
+    mPrepareSyncSeqId=0
+    mBufferSeqId=0
+  Window #11 Window{e5912af u0 com.android.launcher3/com.android.launcher3.uioverrides.QuickstepLauncher}:
+    mDisplayId=0 taskId=38 mSession=Session{7a16c84 4587:u0a10183} mClient=android.os.BinderProxy@c39aa8e
+    mOwnerUid=10183 showForAllUsers=false package=com.android.launcher3 appop=NONE
+    mAttrs={(0,0)(fillxfill) sim={adjust=nothing} layoutInDisplayCutoutMode=always ty=BASE_APPLICATION fmt=TRANSPARENT wanim=0x1030301
+      fl=LAYOUT_IN_SCREEN LAYOUT_INSET_DECOR SHOW_WALLPAPER SPLIT_TOUCH HARDWARE_ACCELERATED DRAWS_SYSTEM_BAR_BACKGROUNDS
+      pfl=NO_MOVE_ANIMATION OPTIMIZE_MEASURE EDGE_TO_EDGE_ENFORCED FORCE_DRAW_STATUS_BAR_BACKGROUND FIT_INSETS_CONTROLLED
+      vsysui=LAYOUT_STABLE LAYOUT_HIDE_NAVIGATION LAYOUT_FULLSCREEN
+      bhv=DEFAULT
+      fitSides=
+      frameRateBoostOnTouch=true
+      dvrrWindowFrameRateHint=true}
+    Requested w=2784 h=1800 mLayoutSeq=59
+    mBaseLayer=21000 mSubLayer=0    mToken=ActivityRecord{265978546 u0 com.android.launcher3/.uioverrides.QuickstepLauncher t38}
+    mActivityRecord=ActivityRecord{265978546 u0 com.android.launcher3/.uioverrides.QuickstepLauncher t38}
+    drawnStateEvaluated=true    mightAffectAllDrawn=true
+    mViewVisibility=0x8 mHaveFrame=true mObscured=true
+    mGivenContentInsets=[0,0][0,0] mGivenVisibleInsets=[0,0][0,0]
+    mFullConfiguration={1.0 ?mcc0mnc [en_US] ldltr sw720dp w1114dp h720dp 400dpi xlrg compactNeeded hdr land night finger -keyb/v/h -nav/h winConfig={ mBounds=Rect(0, 0 - 2784, 1800) mAppBounds=Rect(0, 0 - 2784, 1800) mMaxBounds=Rect(0, 0 - 2784, 1800) mDisplayRotation=ROTATION_0 mWindowingMode=fullscreen mActivityType=home mAlwaysOnTop=undefined mRotation=ROTATION_0} s.8 fontWeightAdjustment=0}
+    mLastReportedConfiguration={1.0 ?mcc0mnc [en_US] ldltr sw720dp w1114dp h720dp 400dpi xlrg compactNeeded hdr land night finger -keyb/v/h -nav/h winConfig={ mBounds=Rect(0, 0 - 2784, 1800) mAppBounds=Rect(0, 0 - 2784, 1800) mMaxBounds=Rect(0, 0 - 2784, 1800) mDisplayRotation=ROTATION_0 mWindowingMode=fullscreen mActivityType=home mAlwaysOnTop=undefined mRotation=ROTATION_0} s.5 fontWeightAdjustment=0}
+    mLastReportedActivityWindowInfo=ActivityWindowInfo{isEmbedded=false, taskBounds=Rect(0, 0 - 2784, 1800), taskFragmentBounds=Rect(0, 0 - 2784, 1800)}
+    mHasSurface=false isReadyForDisplay()=false mWindowRemovalAllowed=false
+    Frames: parent=[0,0][2784,1800] display=[0,0][2784,1800] frame=[0,0][2784,1800] last=[0,0][2784,1800] insetsChanged=false
+     surface=[0,0][0,0]
+    WindowStateAnimator{f00dbc9 com.android.launcher3/com.android.launcher3.uioverrides.QuickstepLauncher}:
+      mDrawState=NO_SURFACE       mLastHidden=true
+      mEnterAnimationPending=false
+    mWallpaperX=0.0 mWallpaperY=0.5
+    mWallpaperXStep=0.33333334 mWallpaperYStep=1.0
+    mWallpaperZoomOut=0.0
+    isOnScreen=false
+    isVisible=false
+    keepClearAreas: restricted=[], unrestricted=[]
+    mPrepareSyncSeqId=0
+    mBufferSeqId=0
+  Window #12 Window{184081e u0 com.android.launcher3/com.android.quickstep.RecentsActivity}:
+    mDisplayId=0 taskId=49 mSession=Session{7a16c84 4587:u0a10183} mClient=android.os.BinderProxy@ab06459
+    mOwnerUid=10183 showForAllUsers=false package=com.android.launcher3 appop=NONE
+    mAttrs={(0,0)(fillxfill) sim={adjust=pan} layoutInDisplayCutoutMode=always ty=BASE_APPLICATION fmt=TRANSPARENT wanim=0x1030301
+      fl=LAYOUT_IN_SCREEN LAYOUT_INSET_DECOR SHOW_WALLPAPER SPLIT_TOUCH HARDWARE_ACCELERATED DRAWS_SYSTEM_BAR_BACKGROUNDS
+      pfl=NO_MOVE_ANIMATION EDGE_TO_EDGE_ENFORCED FORCE_DRAW_STATUS_BAR_BACKGROUND FIT_INSETS_CONTROLLED
+      vsysui=LAYOUT_STABLE LAYOUT_HIDE_NAVIGATION LAYOUT_FULLSCREEN
+      bhv=DEFAULT
+      fitSides=
+      frameRateBoostOnTouch=true
+      dvrrWindowFrameRateHint=true}
+    Requested w=2784 h=1800 mLayoutSeq=1477
+    mBaseLayer=21000 mSubLayer=0    mToken=ActivityRecord{185241765 u0 com.android.launcher3/com.android.quickstep.RecentsActivity t49}
+    mActivityRecord=ActivityRecord{185241765 u0 com.android.launcher3/com.android.quickstep.RecentsActivity t49}
+    drawnStateEvaluated=true    mightAffectAllDrawn=true
+    mViewVisibility=0x4 mHaveFrame=true mObscured=true
+    mGivenContentInsets=[0,0][0,0] mGivenVisibleInsets=[0,0][0,0]
+    mFullConfiguration={1.0 ?mcc0mnc [en_US] ldltr sw720dp w1114dp h720dp 400dpi xlrg compactNeeded hdr land night finger -keyb/v/h -nav/h winConfig={ mBounds=Rect(0, 0 - 2784, 1800) mAppBounds=Rect(0, 0 - 2784, 1800) mMaxBounds=Rect(0, 0 - 2784, 1800) mDisplayRotation=ROTATION_0 mWindowingMode=fullscreen mActivityType=recents mAlwaysOnTop=undefined mRotation=ROTATION_0} s.13 fontWeightAdjustment=0}
+    mLastReportedConfiguration={1.0 ?mcc0mnc [en_US] ldltr sw720dp w1114dp h720dp 400dpi xlrg compactNeeded hdr land night finger -keyb/v/h -nav/h winConfig={ mBounds=Rect(0, 0 - 2784, 1800) mAppBounds=Rect(0, 0 - 2784, 1800) mMaxBounds=Rect(0, 0 - 2784, 1800) mDisplayRotation=ROTATION_0 mWindowingMode=fullscreen mActivityType=recents mAlwaysOnTop=undefined mRotation=ROTATION_0} s.13 fontWeightAdjustment=0}
+    mLastReportedActivityWindowInfo=ActivityWindowInfo{isEmbedded=false, taskBounds=Rect(0, 0 - 2784, 1800), taskFragmentBounds=Rect(0, 0 - 2784, 1800)}
+    mHasSurface=false isReadyForDisplay()=false mWindowRemovalAllowed=false
+    Frames: parent=[0,0][2784,1800] display=[0,0][2784,1800] frame=[0,0][2784,1800] last=[0,0][2784,1800] insetsChanged=false
+     surface=[0,0][0,0]
+    WindowStateAnimator{793ea65 com.android.launcher3/com.android.quickstep.RecentsActivity}:
+      mDrawState=NO_SURFACE       mLastHidden=true
+      mEnterAnimationPending=false
+    isOnScreen=false
+    isVisible=false
+    keepClearAreas: restricted=[], unrestricted=[]
+    mPrepareSyncSeqId=0
+    mBufferSeqId=0
+  Window #13 Window{f4f06c4 u0 com.android.systemui.wallpapers.ImageWallpaper}:
+    mDisplayId=0 mSession=Session{b4098dd 4045:u0a10176} mClient=android.os.BinderProxy@d7f3dd7
+    mOwnerUid=10176 showForAllUsers=true package=com.android.systemui appop=NONE
+    mAttrs={(0,0)(2784x3093) gr=TOP START CENTER layoutInDisplayCutoutMode=always ty=WALLPAPER fmt=RGBX_8888 wanim=0x103031d
+      fl=NOT_FOCUSABLE NOT_TOUCHABLE LAYOUT_IN_SCREEN LAYOUT_NO_LIMITS SCALED LAYOUT_INSET_DECOR
+      pfl=WANTS_OFFSET_NOTIFICATIONS SHOW_FOR_ALL_USERS
+      bhv=DEFAULT
+      frameRateBoostOnTouch=true
+      dvrrWindowFrameRateHint=true}
+    Requested w=2160 h=2400 mLayoutSeq=1479
+    mIsImWindow=false mIsWallpaper=true mIsFloatingLayer=true
+    mBaseLayer=11000 mSubLayer=0    mToken=WallpaperWindowToken{9f2d5a showWhenLocked=true}
+    mViewVisibility=0x0 mHaveFrame=true mObscured=true
+    mGivenContentInsets=[0,0][0,0] mGivenVisibleInsets=[0,0][0,0]
+    mFullConfiguration={1.0 ?mcc0mnc [en_US] ldltr sw720dp w1114dp h720dp 400dpi xlrg compactNeeded hdr land night finger -keyb/v/h -nav/h winConfig={ mBounds=Rect(0, 0 - 2784, 1800) mAppBounds=Rect(0, 0 - 2784, 1800) mMaxBounds=Rect(0, 0 - 2784, 1800) mDisplayRotation=ROTATION_0 mWindowingMode=fullscreen mActivityType=undefined mAlwaysOnTop=undefined mRotation=ROTATION_0} s.6 fontWeightAdjustment=0}
+    mLastReportedConfiguration={1.0 ?mcc0mnc [en_US] ldltr sw720dp w1114dp h720dp 400dpi xlrg compactNeeded hdr land night finger -keyb/v/h -nav/h winConfig={ mBounds=Rect(0, 0 - 2784, 1800) mAppBounds=Rect(0, 0 - 2784, 1800) mMaxBounds=Rect(0, 0 - 2784, 1800) mDisplayRotation=ROTATION_0 mWindowingMode=fullscreen mActivityType=undefined mAlwaysOnTop=undefined mRotation=ROTATION_0} s.6 fontWeightAdjustment=0}
+    mHasSurface=true isReadyForDisplay()=false mWindowRemovalAllowed=false
+    Frames: parent=[0,0][2784,1800] display=[-100000,-100000][100000,100000] frame=[0,0][2784,3093] last=[0,0][2784,3093] insetsChanged=false
+     surface=[0,0][0,0]
+    WindowStateAnimator{3d0dfd0 com.android.systemui.wallpapers.ImageWallpaper}:
+      mSurface=Surface(name=com.android.systemui.wallpapers.ImageWallpaper#73)/@0x7a5611c
+      Surface: shown=false      mDrawState=HAS_DRAWN       mLastHidden=true
+      mEnterAnimationPending=false
+    mXOffset=0 mYOffset=-646
+    mHScale=1.2888889 mVScale=1.28875
+    mWallpaperX=0.0 mWallpaperY=0.5
+    mWallpaperXStep=0.33333334 mWallpaperYStep=1.0
+    mWallpaperZoomOut=0.0
+    isOnScreen=false
+    isVisible=false
+    keepClearAreas: restricted=[], unrestricted=[]
+    mPrepareSyncSeqId=0
+    mBufferSeqId=0
+
+  mGlobalConfiguration={1.0 ?mcc0mnc [en_US] ldltr sw720dp w1114dp h720dp 400dpi xlrg compactNeeded hdr land night finger -keyb/v/h -nav/h winConfig={ mBounds=Rect(0, 0 - 2784, 1800) mAppBounds=Rect(0, 0 - 2784, 1800) mMaxBounds=Rect(0, 0 - 2784, 1800) mDisplayRotation=ROTATION_0 mWindowingMode=fullscreen mActivityType=undefined mAlwaysOnTop=undefined mRotation=ROTATION_0} s.6 fontWeightAdjustment=0}
+  mHasPermanentDpad=false
+  mTopFocusedDisplayId=0
+  Minimum task size of display#0 220
+  mBlurEnabled=false
+  mDisableSecureWindows=false
+ mHighResSnapshotScale=1.0
+ mSnapshotEnabled=true
+ SnapshotCache Task
+ mHighResSnapshotScale=0.6
+ mSnapshotEnabled=true
+ SnapshotCache Activity
+   UserSavedFile userId=0
+  mInputMethodWindow=Window{98a1ab u0 InputMethod}
+  mTraversalScheduled=false
+  mSystemBooted=true mDisplayEnabled=true
+  mTransactionSequence=2128
+  mRotation=0
+  mLastOrientation=-1
+  mWaitingForConfig=false
+  mWindowsInsetsChanged=0
+  mDisplayRotationWatchers: [ 10183->0 10176->0]
+  Animation settings: disabled=false window=1.0 transition=1.0 animator=1.0

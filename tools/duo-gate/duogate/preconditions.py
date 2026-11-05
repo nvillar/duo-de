@@ -17,6 +17,8 @@ from .model import EvidenceError, Verdict
 
 PROBE_HOME = PROBE_PACKAGE + "/.ProbeHomeActivity"
 PROBE_PROTOCOL = "gate-2"
+# gate-3 adds targets events on scroll; with gate-2, a scrolled or keyboard-covered target is INCOMPLETE
+PROBE_PROTOCOLS = ("gate-2", "gate-3")
 PANEL_PROPS = ("persist.sys.phh.duo.panels", "persist.debug.phh.duo.panels")
 REBOOT_SETTLE = 5.0
 
@@ -81,9 +83,9 @@ def collect(dev, op) -> tuple[dict, Verdict]:
     # what the gates depend on
     if not isinstance(probe, dict) or not probe:
         v.incomplete("DuoProbe (%s) not installed" % PROBE_PACKAGE)
-    elif probe.get("versionName") != PROBE_PROTOCOL:
+    elif probe.get("versionName") not in PROBE_PROTOCOLS:
         v.incomplete("DuoProbe versionName=%s, need %s (rebuild/install tools/duo-probe)"
-                     % (probe.get("versionName"), PROBE_PROTOCOL))
+                     % (probe.get("versionName"), " or ".join(PROBE_PROTOCOLS)))
     if pre["density"] is not None and not isinstance(pre["density"], str):
         phys, override = pre["density"]
         if (override or phys) != 400:

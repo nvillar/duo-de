@@ -31,7 +31,7 @@ app (`tools/duo-probe`, version `gate-2` or later).
 - adb on `PATH` (or `--adb` / `$ADB`), one device (or `--serial`), USB debugging authorised.
 - The panel image (`sys.duode.panels.active=1`), unfolded, both panels lit, rotation 0. `wm size` must have no
   override (a single-screen posture is refused).
-- DuoProbe **gate-2** installed (`dumpsys package org.duode.probe` shows `versionName=gate-2`). It adds the touch/text
+- DuoProbe **gate-2** or **gate-3** installed (`dumpsys package org.duode.probe` shows the `versionName`). It adds the touch/text
   sentinel and `targets` events and *Probe test 2 (own task)*; an older probe stops the run at preflight. Rebuild and
   install it as in `tools/duo-probe/README.md` (`adb install -r` works over the system copy).
 - `uv` (any Python >= 3.10 it provides). No packages are installed.
@@ -148,6 +148,22 @@ of `dumpsys activity activities` (TaskFragment.dump, printed only when hidden), 
 `dumpsys activity recents`, `am stack remove <task>` (removal verified in the containers dump) and
 `wm dismiss-keyguard` to show the bouncer. The uiautomator dump is only a fallback for the probe home buttons when the
 probe's `targets` event is no longer in the log buffer.
+
+## Tap targets and broken state
+
+- Taps on a probe task use `targets` positions only inside its visible band: below its top bars and above its bottom
+  bar or the keyboard (from the task's latest `insets` event). A control scrolled away (a synthetic edge swipe that
+  is not taken as a gesture scrolls the probe) or covered by the keyboard is first dragged into view slowly (no
+  fling); DuoProbe **gate-3** reports the new position after the scroll. With gate-2 such a tap is INCOMPLETE ("DuoProbe
+  gate-3 needed") instead of landing on the keyboard or off screen.
+- Home and Back checks also require the other panel's task to stay reachable by input at its panel (input dispatcher
+  window touchable, frame = panel), and Back requires the gestured task not to be left transformed. After every
+  Home/Back repetition the pair is checked the same way; a broken pair is saved (`extra/*-broken-window.txt`,
+  `*-broken-wmshell.txt`), noted on the attempt and re-created, so later repetitions do not inherit it.
+- Minimize evidence accepts the policy's reasons `Home`, `Home from Recents` and `Recents #<n>` (M2.2, fw 0018);
+  `DuoRecents` lines are kept in `logcat.txt`.
+- PO dismisses a non-secure keyguard after each of its reboots (recorded in `preconditions.keyguard_after_reboot`); with
+  a secure lock it asks the operator, and without one the PO checks are INCOMPLETE (the properties are still restored).
 
 ## Offline tests
 

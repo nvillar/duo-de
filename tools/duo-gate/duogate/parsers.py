@@ -645,11 +645,23 @@ def posture_composition(line: LogLine) -> int | None:
     return int(m.group(1)) if m else None
 
 
+_MINIMIZE = re.compile(r"(Home|Home from Recents|Recents #\d+): minimizing (Panel\d+) \((\d+) tasks\)")
+
+
 def policy_minimized_panel(line: LogLine) -> tuple[str, int] | None:
+    """A panel minimized by the policy: Home on the focused panel (fw 0008/0014), and since M2.2 (fw 0018) also
+    "Home from Recents" (Quickstep gesture Home, fallback Recents) and "Recents #<id>" (end of a panel Recents
+    session that went home)."""
+    m = minimize_event(line)
+    return (m[1], m[2]) if m else None
+
+
+def minimize_event(line: LogLine) -> tuple[str, str, int] | None:
+    """(reason, panel, task count) of a policy minimize log line."""
     if line.tag != "DuoDisplayAreaPolicy":
         return None
-    m = re.match(r"Home: minimizing (\S+) \((\d+) tasks\)", line.msg)
-    return (m.group(1), int(m.group(2))) if m else None
+    m = _MINIMIZE.match(line.msg)
+    return (m.group(1), m.group(2), int(m.group(3))) if m else None
 
 
 def policy_restored_task(line: LogLine) -> int | None:

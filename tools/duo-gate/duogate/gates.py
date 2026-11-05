@@ -10,6 +10,7 @@ from .checks import DUO1, SIDES, Geometry, other
 from .device import HOME_BUTTONS, KEY_ENTER, KEY_HOME, KEY_POWER, KEY_WAKEUP, Device
 from .model import INCOMPLETE, PASS, Check, EvidenceError, Verdict
 from .parsers import android_bool, parse_dropbox
+from . import preconditions
 from .preconditions import PROBE_HOME
 
 
@@ -103,7 +104,7 @@ def setup_pair(ctx: Ctx, keys=None, name: str = "setup") -> dict:
 def focus_by_touch(ctx: Ctx, side: str, task: int, others, name: str) -> tuple[Verdict, list[str], str]:
     """Taps the task's title (not an editor): proves real input receipt and moves focus to it."""
     dev = ctx.dev
-    x, y = dev.point(dev.task_targets(task), "title", side)
+    x, y = dev.task_point(task, "title", side)
     st = dev.step(name, lambda: dev.tap(x, y), until=_touched(task))
     v = C.eval_touch(st.events, x, y, task, others)
     v.merge(C.eval_focus(st.snap, task))
@@ -116,8 +117,11 @@ def relaunch(ctx: Ctx, side: str, key: str, task: int, name: str) -> Verdict:
     return v
 
 
-def restore_pair(ctx: Ctx, pair: dict, keys: dict, name: str) -> None:
-    """After Home/Back: relaunch any pair task that is hidden or stopped, so the next repetition starts clean."""
+def restore_pair(ctx: Ctx, pair: dict, keys: dict, name: str, check: Check | None = None) -> None:
+    """After Home/Back: relaunch any pair task that is hidden or stopped, so the next repetition starts clean. If a
+    visible pair task is not reachable by input at its panel (an animation left it transformed, or its window was
+    dropped from input), the evidence is saved and the pair is re-created (`pair` is updated in place): later
+    repetitions must not inherit a broken state, and the attempt that caused it already recorded the failure."""
     dev = ctx.dev
     snap = dev.snap(name + "-check", kinds=("activities",))
     acts = snap.activities
@@ -130,6 +134,20 @@ def restore_pair(ctx: Ctx, pair: dict, keys: dict, name: str) -> None:
             v = relaunch(ctx, side, keys[side], pair[side], "%s.%s" % (name, side))
             if not v.ok:
                 raise SetupError("could not restore side %s: %s" % (side, "; ".join(v.reasons)))
+    snap = dev.snap(name + "-input", kinds=("windows", "input"))
+    broken = []
+    for side in SIDES:
+        v = C.eval_input_ok(snap, pair[side], side, dev.geo)
+        if not v.ok:
+            broken += v.reasons
+    if broken:
+        files = [dev.save_text(name + "-broken-window", dev.adb.shell("dumpsys window", timeout=60)),
+                 dev.save_text(name + "-broken-wmshell", dev.adb.shell(
+                     "dumpsys activity service SystemUIService WMShell", timeout=60, check=False))]
+        msg = "pair re-created: device left in a broken state (%s); evidence %s" % ("; ".join(broken), ", ".join(files))
+        if check is not None and check.attempts:
+            check.attempts[-1].notes.append(msg)
+        pair.update(setup_pair(ctx, keys, name + ".recreate"))
 
 
 PAIR_KEYS = {"A": "probeTest", "B": "probeTest2"}
@@ -336,7 +354,7 @@ def gate_g2(ctx: Ctx) -> None:
                 v.merge(C.eval_restored(st.lines, pair[s]))
                 return v, st.evidence, st.marker
             _record(restore[s], attempt_restore)
-            restore_pair(ctx, pair, PAIR_KEYS, tag + ".clean")
+            restore_pair(ctx, pair, PAIR_KEYS, tag + ".clean", restore[s])
 
     manual: dict = {}
 
@@ -386,7 +404,7 @@ def gate_g2(ctx: Ctx) -> None:
                     v.note("Home performed by the operator (real gesture)")
                     return v, ev + ["marker " + mid] + snap.files, mid
                 _record(manual_check(s), attempt_manual)
-            restore_pair(ctx, pair, PAIR_KEYS, tag + ".clean")
+            restore_pair(ctx, pair, PAIR_KEYS, tag + ".clean", cross[s])
 
 
 # ---------------------------------------------------------------------------------------------------------------------
@@ -425,7 +443,7 @@ def gate_g4(ctx: Ctx) -> None:
                 v.merge(C.eval_back(st.events, st.snap, s, pair[s], pair[o], dev.geo))
                 return v, ev + st.evidence, st.marker
             _record(back[s], attempt)
-            restore_pair(ctx, pair, PAIR_KEYS, tag + ".clean")
+            restore_pair(ctx, pair, PAIR_KEYS, tag + ".clean", back[s])
 
     for s in SIDES:
         o = other(s)
@@ -516,7 +534,7 @@ def gate_g5(ctx: Ctx) -> None:
 
             def attempt(side=side, editor=editor, o=o, tag=tag):
                 t = pair[side]
-                x, y = dev.point(dev.task_targets(t), "editor%d" % editor, side)
+                x, y = dev.task_point(t, "editor%d" % editor, side)
                 if ime_up(latest(t, "insets", None)):
                     # keyboard already up for this task: the tap only moves editor focus
                     until = lambda evs: any(e.task == t and (e.event == "editorFocus" or (
@@ -562,7 +580,7 @@ def gate_g5(ctx: Ctx) -> None:
         area = c.task_display_area(node) if node else None
         if area is None:
             raise EvidenceError("task %d not found after rotation" % t)
-        x, y = dev.point(dev.task_targets(t), "editor1", area=area.bounds)
+        x, y = dev.task_point(t, "editor1", area=area.bounds)
         st = dev.step("G5.rotate.ime", lambda: dev.tap(x, y), until=lambda evs: any(
             e.task == t and e.event == "insets" and ime_up(e) for e in evs))
         v.merge(C.eval_touch(st.events, x, y, t, (o,)))
@@ -580,7 +598,7 @@ def gate_g5(ctx: Ctx) -> None:
 
     def attempt_fold():
         t, o = pair["A"], pair["B"]
-        x, y = dev.point(dev.task_targets(t), "editor1", "A")
+        x, y = dev.task_point(t, "editor1", "A")
         dev.step("G5.fold.prepare", lambda: dev.tap(x, y), snapshot=False, until=lambda evs: any(
             e.task == t and e.event == "insets" and e.kv.get("imeVisible") == "true" for e in evs))
         mid, start = dev.mark("G5.fold")
@@ -668,7 +686,7 @@ def gate_g6(ctx: Ctx) -> None:
             ordinary = tuple(pair[s] for s in SIDES if s != swl)
             swl_task = pair[swl] if swl else None
             touch_side = next(s for s in SIDES if s != swl) if swl else "B"
-            tx, ty = dev.point(dev.task_targets(pair[touch_side]), "title", touch_side)
+            tx, ty = dev.task_point(pair[touch_side], "title", touch_side)
             for i in range(n):
                 tag = "G6.%s.%d" % (name, i + 1)
 
@@ -919,16 +937,26 @@ def gate_panel_off(ctx: Ctx) -> None:
 
     def reboot():
         adb.run(["reboot"], check=False)
-        time.sleep(10)
+        time.sleep(dev.boot_wait)
         adb.wait_for_boot()
-        time.sleep(10)
+        time.sleep(dev.boot_wait)
         dev.restart_log()
-        if dev.snap("PO.boot", kinds=("activities",)).activities.keyguard_showing:
-            # a secure lock needs the first unlock after boot (credential-encrypted storage)
+        # the keyguard comes back after every boot: dismissed when there is no secure lock (as in the preflight,
+        # recorded, nothing restored); a secure lock needs the operator (first unlock after boot)
+        state: dict = {"secure_lock": ctx.pre.get("secure_lock")}
+        kv = preconditions.check_keyguard(dev, state, dismiss=True)
+        ctx.pre.setdefault("keyguard_after_reboot", []).append(state.get("keyguard"))
+        if not kv.ok and ctx.pre.get("secure_lock") != "NONE":
             ctx.op.wait("The device rebooted and is locked: unlock it on screen.")
             time.sleep(2)
-            if dev.snap("PO.boot.unlocked", kinds=("activities",)).activities.keyguard_showing:
-                raise SetupError("device still locked after reboot")
+            kv = preconditions.check_keyguard(dev, state, dismiss=False)
+        if not kv.ok:
+            raise SetupError("after reboot: %s" % "; ".join(kv.reasons))
+
+    def skip_pending(checks, why):
+        for c in checks:
+            if not c.attempts and c.skipped is None:
+                c.skip(why)
 
     try:
         for k in changed:
@@ -938,7 +966,11 @@ def gate_panel_off(ctx: Ctx) -> None:
             for c in [off] + list(launch.values()):
                 c.skip("cannot clear %s (persist.sys.* needs adb root)" % props)
         else:
-            reboot()
+            try:
+                reboot()
+            except SetupError as e:
+                skip_pending([off] + list(launch.values()), str(e))
+                raise
 
             def attempt_off():
                 snap = dev.snap("PO.off", screenshot=True)
@@ -951,11 +983,18 @@ def gate_panel_off(ctx: Ctx) -> None:
                     return v, st.evidence, st.marker
                 _record(launch[s], attempt)
                 dev.remove_probe_tasks()
+    except SetupError:
+        pass        # the pending checks were skipped with the reason; restoration still runs below
     finally:
         for k in changed:
             adb.shell("setprop %s %s" % (k, recorded[k]), check=False)
         if changed:
-            reboot()
+            try:
+                reboot()
+            except SetupError as e:
+                skip_pending([back_on], str(e))
+    if back_on.skipped is not None:
+        return
 
     def attempt_back():
         v = Verdict()
