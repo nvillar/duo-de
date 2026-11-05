@@ -1,0 +1,152 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Nicolas Villar <15879262+nvillar@users.noreply.github.com>
+Date: Thu, 5 Nov 2026 14:04:49 -0800
+Subject: [PATCH] Duo: a stale focus gain hide does not undo the keyboard the
+ tap asked for
+
+A tap on an editor in the window of the other panel moves window focus on its down. When the focus event reaches the
+app before the up (gate m2test4, G5.ime.B.fromA rep 1: down +0 ms, window focus +35 ms, up +43 ms), the window gains
+focus with no focused editor: InputMethodManager reports the focus gain with startInputOrWindowGainedFocus, and the
+system answers (soft input state unspecified, no editor) with HIDE_UNSPECIFIED_WINDOW, sent to the client as a oneway
+IInputMethodClient.setImeVisibility(false) (InputMethodManagerService.startInputOrWindowGainedFocusInternalLocked ->
+setImeVisibilityOnFocusedWindowClient) and handled later on the client's handler (MSG_SET_VISIBILITY). The up then
+focuses the editor, which asks for the keyboard; the request is served and the keyboard shows (+72 ms, ime=1008). The
+hide, computed for the state before the tap, arrives after that and takes the keyboard away (+118 ms, imeVisible=false).
+fw 0023 only covers the other order (up before the focus event).
+
+While the two panel policy is active, on the default display, a focus gain without a focused text editor arms an
+expectation of that hide (500 ms). If the app asks for the keyboard from the same window (a served showSoftInput)
+before the system's first visibility change after the focus gain arrives, and that change is a hide, it is ignored
+(logged "Duo: ignoring the focus gain hide that arrived after the editor asked for the keyboard"; ImeTracker records
+it cancelled). The first visibility change from the system after the focus gain consumes the expectation whatever it
+is, and the server sends its visibility changes to a client in order, so a later hide (Back, another window, the app's
+own hide) is always applied. Nothing changes with the policy off, or when the hide arrives before the show.
+
+Not built or run on a device yet. Verified by git am -3 after the series and a javac type check against the gate
+build's framework jar.
+
+Co-authored-by: Copilot App <223556219+Copilot@users.noreply.github.com>
+---
+ .../view/inputmethod/InputMethodManager.java  | 78 +++++++++++++++++++
+ 1 file changed, 78 insertions(+)
+
+diff --git a/core/java/android/view/inputmethod/InputMethodManager.java b/core/java/android/view/inputmethod/InputMethodManager.java
+index f17aaef28..d3ce045ed 100644
+--- a/core/java/android/view/inputmethod/InputMethodManager.java
++++ b/core/java/android/view/inputmethod/InputMethodManager.java
+@@ -525,6 +525,22 @@ public final class InputMethodManager {
+     @GuardedBy("mH")
+     private long mDuoPendingShowUptimeMs;
+ 
++    /**
++     * Duo two panel policy: the root that last gained window focus without a focused text editor, while the hide the
++     * system answers such a focus gain with (soft input state unspecified: HIDE_UNSPECIFIED_WINDOW) has not arrived
++     * yet; see {@link #armDuoFocusGainHideLocked}.
++     */
++    @GuardedBy("mH")
++    @Nullable
++    private WeakReference<ViewRootImpl> mDuoFocusGainRoot;
++    @GuardedBy("mH")
++    private long mDuoFocusGainUptimeMs;
++    /** The app asked for the keyboard from that root after the focus gain, before the system's hide arrived. */
++    @GuardedBy("mH")
++    private boolean mDuoShowAfterFocusGain;
++    /** How long after a focus gain without an editor its hide is still expected. */
++    private static final long DUO_FOCUS_GAIN_HIDE_TIMEOUT_MS = 500;
++
+     /** Runtime state published by the window manager: 1 while the two panel window policy is active. */
+     private static final String DUO_PANELS_ACTIVE_PROP = "sys.duode.panels.active";
+     /** A remembered show request older than this (the window focus did not follow the tap) is dropped. */
+@@ -888,6 +904,9 @@ public final class InputMethodManager {
+         public void onPostWindowGainedFocus(View viewForWindowFocus,
+                 @NonNull WindowManager.LayoutParams windowAttribute) {
+             onPostWindowGainedFocusInner(viewForWindowFocus, windowAttribute);
++            synchronized (mH) {
++                armDuoFocusGainHideLocked(viewForWindowFocus);
++            }
+             // Duo two panel policy: replay a keyboard request that the tap which focused this window made before the
+             // window focus arrived (see recordDuoPendingShowLocked).
+             final View pendingShowView;
+@@ -1219,6 +1238,57 @@ public final class InputMethodManager {
+         }
+     }
+ 
++    /**
++     * Duo two panel policy. A tap on an editor in the window of the other panel moves window focus on its down; when
++     * the focus event reaches the app before the up, the window gains focus with no focused editor yet. The system
++     * answers that focus gain (soft input state unspecified, no editor: HIDE_UNSPECIFIED_WINDOW) with a hide that it
++     * sends to the client asynchronously (IInputMethodClient#setImeVisibility, MSG_SET_VISIBILITY). The up then
++     * focuses the editor, which asks for the keyboard and gets it; the hide, computed for the state before the tap,
++     * arrived after that and took the keyboard away (gate G5.ime.B.fromA rep 1: shown, then hidden 46 ms later).
++     * Remember such a focus gain so that its hide can be recognised (see {@link #isStaleDuoFocusGainHideLocked}).
++     * Only while the two panel policy is active, on the default display.
++     */
++    @GuardedBy("mH")
++    private void armDuoFocusGainHideLocked(@Nullable View viewForWindowFocus) {
++        mDuoFocusGainRoot = null;
++        mDuoShowAfterFocusGain = false;
++        if (mCurRootView == null || mCurRootView.getDisplayId() != Display.DEFAULT_DISPLAY
++                || (viewForWindowFocus != null && viewForWindowFocus.onCheckIsTextEditor())
++                || !SystemProperties.getBoolean(DUO_PANELS_ACTIVE_PROP, false)) {
++            return;
++        }
++        mDuoFocusGainRoot = new WeakReference<>(mCurRootView);
++        mDuoFocusGainUptimeMs = SystemClock.uptimeMillis();
++    }
++
++    /** A served show request from {@code viewRootImpl}: the app asked for the keyboard after that focus gain. */
++    @GuardedBy("mH")
++    private void noteDuoShowAfterFocusGainLocked(@Nullable ViewRootImpl viewRootImpl) {
++        if (mDuoFocusGainRoot != null && viewRootImpl != null && mDuoFocusGainRoot.get() == viewRootImpl
++                && SystemClock.uptimeMillis() - mDuoFocusGainUptimeMs <= DUO_FOCUS_GAIN_HIDE_TIMEOUT_MS) {
++            mDuoShowAfterFocusGain = true;
++        }
++    }
++
++    /**
++     * Whether a visibility change from the system is the hide answering the last focus gain without an editor, and
++     * the app has asked for the keyboard from the same window since: that hide is stale and must not undo the newer
++     * request. The first visibility change from the system after the focus gain consumes the expectation, whatever it
++     * is, so a later hide (Back, another window, the app) is always applied. It also expires after
++     * {@link #DUO_FOCUS_GAIN_HIDE_TIMEOUT_MS}.
++     */
++    @GuardedBy("mH")
++    private boolean isStaleDuoFocusGainHideLocked(boolean visible) {
++        if (mDuoFocusGainRoot == null) {
++            return false;
++        }
++        final boolean stale = !visible && mDuoShowAfterFocusGain && mDuoFocusGainRoot.get() == mCurRootView
++                && SystemClock.uptimeMillis() - mDuoFocusGainUptimeMs <= DUO_FOCUS_GAIN_HIDE_TIMEOUT_MS;
++        mDuoFocusGainRoot = null;
++        mDuoShowAfterFocusGain = false;
++        return stale;
++    }
++
+     class H extends Handler {
+         H(Looper looper) {
+             super(looper, null, true);
+@@ -1544,6 +1614,13 @@ public final class InputMethodManager {
+                     final ImeTracker.Token statsToken = (ImeTracker.Token) args.arg2;
+                     synchronized (mH) {
+                         if (mCurRootView != null) {
++                            if (isStaleDuoFocusGainHideLocked(visible)) {
++                                Log.i(TAG, "Duo: ignoring the focus gain hide that arrived after the editor"
++                                        + " asked for the keyboard");
++                                ImeTracker.forLogging().onCancelled(statsToken,
++                                        ImeTracker.PHASE_CLIENT_HANDLE_SET_IME_VISIBILITY);
++                                break;
++                            }
+                             ImeTracker.forLogging().onProgress(statsToken,
+                                     ImeTracker.PHASE_CLIENT_HANDLE_SET_IME_VISIBILITY);
+                             setImeVisibilityOnInsetsController(mCurRootView, visible, statsToken);
+@@ -2584,6 +2661,7 @@ public final class InputMethodManager {
+                             imeReqVisible ? InputMethodManager.RESULT_UNCHANGED_SHOWN
+                                     : InputMethodManager.RESULT_SHOWN, null);
+                 }
++                noteDuoShowAfterFocusGainLocked(viewRootImpl);
+                 setImeVisibilityOnInsetsController(viewRootImpl, true /* visible */, statsToken);
+                 return true;
+             }
+-- 
+2.34.1
+
