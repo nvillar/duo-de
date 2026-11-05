@@ -77,7 +77,7 @@ dev/podman.sh build ~/aosp --with-probe --label m1gate
 
 It copies `DuoProbe` to `packages/apps/DuoProbe` and adds `PRODUCT_PACKAGES += DuoProbe` to the untracked, generated
 `device/phh/treble/duo-dev.mk`; `provenance.txt` records it (`duo_probe:`). The next build without `--with-probe`
-removes both. Never add the module to `build/aosp.mk` or any tracked makefile.
+removes both; run that build without `--no-installclean`, otherwise the APK left in `out/` stops it. Never add the module to `build/aosp.mk` or any tracked makefile.
 
 ## Using it on the device
 

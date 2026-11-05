@@ -126,7 +126,7 @@ Development happens on the `duo-integration` branch (`git checkout duo-integrati
 | Tag | Image | Build options |
 |---|---|---|
 | `m0-baseline-image` | `duodev.20261104183202.0b049383.baseline` (unmodified series) | `--label baseline` |
-| `m1-gate-image` | `duodev.20261105003423.bfb0d8b7.m1gate` (M1 gate prototype) | `--with-probe --label m1gate` |
+| `m1-gate-image` | `duodev.20261105003423.bfb0d8b7.m1gate` (M1 gate prototype) | `--with-probe --label m1gate --reset-patches --unshallow` |
 
 `git show <tag>` prints the image's SHA-256. Rebuilding a tag gives a new build id (it contains the build time), so the image checksum differs from the recorded one.
 
@@ -190,7 +190,17 @@ It fetches the full history of those projects only, which includes large ones su
 ~/duo-de/dev/podman.sh build ~/aosp
 ```
 
-Expect a clean build to take hours: 5 h 49 min (about 188k Ninja steps) on a 20-thread host with 64 GB assigned to WSL. A rebuild after changing a few framework and Launcher3 patches took 1 h 07 min there, with the default `installclean` and a new build number (about 25 min of it Soong analysis); `--no-installclean` can shorten incremental builds.
+Build times measured on a 20-thread host with 64 GB assigned to WSL, each producing a full system image:
+
+| Build | Time |
+|---|---|
+| Clean build (empty `out/`) | 5 h 49 min, about 188k Ninja steps |
+| Rebuild with new framework/Launcher3 patches, default `installclean`, new build number | 1 h 07 min, about 22k steps (about 25 min of Soong analysis) |
+| Warm tree, `--with-probe --no-installclean`, no source change | 2 min 24 s, 112 steps |
+| Same, after touching sources only: `frameworks/base/services` / Launcher3 | 2 min 08 s / 3 min 45 s |
+| Same, one added constant in a window-manager class in `services` | 3 min 17 s, 227 steps (Ninja 2 min 42 s) |
+
+For quick iterations, use `--no-installclean` with otherwise unchanged options. It skips `make installclean`, so files of modules that are no longer built can stay in `out/` and end up in the image; the one case the build detects is a DuoProbe left over from a `--with-probe` build, which stops a later build without `--with-probe`. Use the default (`installclean`) for images that serve as milestone or gate evidence.
 
 `dev/build.sh` (run inside the container by `dev/podman.sh`):
 
@@ -247,14 +257,15 @@ Keep the resolution date in the file's header current, re-run `dev/podman.sh syn
 
 ### 5.5 Checking that the patch series applies
 
-After changing patches (for example after a TrebleDroid sync, or when moving to a new AOSP tag), check the whole series against a clean tree:
+After changing patches (for example after a TrebleDroid sync, or when moving to a new AOSP tag), check the whole series against a clean tree. There is no `dev/podman.sh` subcommand for it; open a container shell on the tree and run the script there. Inside the container `HOME` is `<tree>/.duo-dev/home`, so `~` does not point at your home directory: use absolute paths (the tree and the harness are mounted at their host paths, and the working directory is the tree):
 
 ```bash
-~/duo-de/dev/podman.sh shell ~/aosp
-~/duo-de/dev/check-apply.sh --unshallow ~/aosp    # inside the container
+~/duo-de/dev/podman.sh shell ~/aosp                                  # on the host
+/home/<user>/duo-de/dev/check-apply.sh --unshallow --restore "$PWD"  # inside the container
+exit
 ```
 
-`dev/check-apply.sh` force-checks-out every patched project at its manifest revision (discarding tracked changes and patch commits in those projects only, like `--reset-patches`), then applies the `trebledroid`, `personal` and `duo` sets in upstream order with `git am -3`. It does not stop at the first failure: a failing patch is aborted and reported, the rest of that project's patches are skipped, and the other projects continue. It ends with a summary and exits 1 if anything failed. `--restore` returns the patched projects to their manifest revision afterwards; `dev/build.sh` re-applies the patches itself on its next run.
+`dev/check-apply.sh` force-checks-out every patched project at its manifest revision (discarding tracked changes and patch commits in those projects only, like `--reset-patches`), then applies the `trebledroid`, `personal` and `duo` sets in upstream order with `git am -3`. It does not stop at the first failure: a failing patch is aborted and reported, the rest of that project's patches are skipped, and the other projects continue. It ends with a summary and exits 1 if anything failed. Always pass `--restore`: it returns the patched projects to their manifest revision afterwards (also after failures), and `dev/build.sh` re-applies the patches itself on its next run. Without it the projects are left at patch commits that `dev/build.sh` may not recognise as its recorded patched state; it then refuses to build until rerun with `--reset-patches`.
 
 To fix a failing patch, apply it by hand in that project (`git am -3`, resolve, `git am --continue`, or re-create the change), regenerate it with `git format-patch -1` into the same file name, and re-run the check.
 

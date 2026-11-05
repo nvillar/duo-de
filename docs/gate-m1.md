@@ -23,14 +23,14 @@ Harness branch `duo-integration` (the exact gate build is tag `m1-gate-image`) o
 
 ## 1. Build and identify the image
 
-On the build host, with the harness checked out at `m1-gate-image` (or `duo-integration`) and clean:
+On the build host (not inside a container shell), with the harness checked out at `m1-gate-image` (or `duo-integration`) and clean. This is the command that built the gate image; `--reset-patches` re-applies the whole series from the manifest revisions and stops at the first patch that fails:
 
 ```bash
-~/duo-de/dev/podman.sh shell ~/aosp
-~/duo-de/dev/check-apply.sh --unshallow ~/aosp      # inside the container; whole series must apply
-exit
-~/duo-de/dev/podman.sh build ~/aosp --with-probe --label m1gate
+~/duo-de/dev/podman.sh build ~/aosp --with-probe --label m1gate --reset-patches --unshallow
 ```
+
+To list every failing patch instead, run `dev/check-apply.sh --unshallow --restore` in a container shell
+(`docs/development-setup.md`, 5.5); always with `--restore`, so that the next build accepts the tree.
 
 `provenance.txt` must show `duo_probe: included ...`. Flash with the existing dev-image procedure
 (`docs/development-setup.md`). On the device:
