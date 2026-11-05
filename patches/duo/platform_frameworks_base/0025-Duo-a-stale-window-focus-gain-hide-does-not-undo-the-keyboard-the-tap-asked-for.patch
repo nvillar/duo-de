@@ -15,19 +15,26 @@ computed for the window's state at the focus gain, arrives after that and takes 
 only covers the other order (up before the focus event).
 
 The correlation is explicit, by window and focus report, not by timing:
-- Server: while the two panel policy is active (sys.duode.panels.active=1), a hide computed in
-  startInputOrWindowGainedFocusInternalLocked for a window focus gain (WINDOW_GAINED_FOCUS) is sent with the new
-  internal oneway IInputMethodClient.setImeHiddenOnWindowFocusGain(statsToken, windowToken) instead of
-  setImeVisibility(false). Every other hide (Back, settings, another window, the app) keeps setImeVisibility and is
-  always applied. Both go through the same invoker handler, so their order is unchanged.
-- Client: InputMethodManager keeps, per view root, the sequence number of its last window focus gain report (taken
-  before the synchronous startInputOrWindowGainedFocus) and of its last served showSoftInput. The tagged hide is
-  dropped if it is for the window it would be applied to (window token of the current root, default display) and that
-  window made a served show request after it last reported a focus gain. The check runs on the view's thread right
-  before the hide would be applied (setImeVisibilityOnInsetsController posts there when the loopers differ), where the
-  window's show requests are made, so a request made before the hide runs is always seen. Logged as "Duo: ignoring
-  the window focus gain hide ..." (tag InputMethodManager); ImeTracker records it cancelled.
-
+- The client already sends a per-process start input sequence number with every startInputOrWindowGainedFocus
+  (IInputMethodManagerGlobalInvoker). While the two panel policy is active (sys.duode.panels.active=1), a hide that
+  startInputOrWindowGainedFocusInternalLocked computes for a window focus gain (WINDOW_GAINED_FOCUS) is sent with the
+  new internal oneway IInputMethodClient.setImeHiddenOnWindowFocusGain(statsToken, windowToken, startInputSeq)
+  instead of setImeVisibility(false). The sequence number of the request being handled is kept in a thread local
+  around startInputOrWindowGainedFocusWithResult (the locked computation runs on that thread, also when
+  ZeroJankProxy offloads the request to the service handler), so internal signatures do not change. Every other hide
+  (Back, settings, another window, the app) keeps setImeVisibility and is always applied; both go through the same
+  invoker handler, so their order is unchanged.
+- The client records each window focus gain report (both report paths: the start input of onPostWindowGainedFocus
+  and the report-only call) under mH, by its start input sequence number: the reporting view root and the local order
+  of the report. It also records, per root, the local order of its last served showSoftInput. A tagged hide is
+  resolved to the root of the report it answers. It is dropped as obsolete if that root is no longer the current
+  root, no longer has that window, or the report is no longer recorded (bounded to 32 reports): a hide for a window
+  is never applied to another window. Otherwise it is dropped as stale if that root made a served show after that
+  report (an older report's hide cannot be validated by a newer report). The staleness check runs on the view's
+  thread right before the hide would be applied (setImeVisibilityOnInsetsController posts there when the loopers
+  differ), where the root's show requests are made, so a request made before the hide runs is always seen. Logged
+  as "Duo: ignoring the window focus gain hide ..." or "Duo: dropping the window focus gain hide for report N ..."
+  (tag InputMethodManager); ImeTracker records them cancelled.
 With the policy off the server never uses the new method and nothing changes. A hide that arrives before the show, or
 a window without a show request after its focus report, is applied as before.
 
@@ -36,35 +43,53 @@ IInputMethodClient stub) against the gate build's framework and services jars.
 
 Co-authored-by: Copilot App <223556219+Copilot@users.noreply.github.com>
 ---
- .../view/inputmethod/InputMethodManager.java  | 112 +++++++++++++++++-
- .../inputmethod/IInputMethodClient.aidl       |   6 +
- .../IInputMethodClientInvoker.java            |  23 ++++
- .../InputMethodManagerService.java            |  13 +-
- 4 files changed, 151 insertions(+), 3 deletions(-)
+ .../view/inputmethod/InputMethodManager.java  | 153 +++++++++++++++++-
+ .../inputmethod/IInputMethodClient.aidl       |   7 +
+ .../IInputMethodClientInvoker.java            |  27 ++++
+ .../InputMethodManagerService.java            |  35 +++-
+ 4 files changed, 212 insertions(+), 10 deletions(-)
 
 diff --git a/core/java/android/view/inputmethod/InputMethodManager.java b/core/java/android/view/inputmethod/InputMethodManager.java
-index f17aaef28..669bf78e1 100644
+index f17aaef28..7b66a5d32 100644
 --- a/core/java/android/view/inputmethod/InputMethodManager.java
 +++ b/core/java/android/view/inputmethod/InputMethodManager.java
-@@ -525,6 +525,17 @@ public final class InputMethodManager {
+@@ -525,6 +525,35 @@ public final class InputMethodManager {
      @GuardedBy("mH")
      private long mDuoPendingShowUptimeMs;
  
 +    /**
-+     * Duo two panel policy: per window (view root) of this process, the sequence number of its last window focus gain
-+     * reported to the system ([0]) and of its last served show request ([1]), from {@link #mDuoImeSeq}. Used to tell
-+     * whether the hide the system computed for a window focus gain is older than a keyboard request of that window
-+     * (see {@link #isDuoWindowFocusHideStale}).
++     * Duo two panel policy: the window focus gains this process reported to the system, by the start input sequence
++     * number the report was sent with (which the system echoes in setImeHiddenOnWindowFocusGain): the reporting root
++     * and the local order of the report ({@link #mDuoImeSeq}). Bounded; an entry is removed when its hide arrives.
 +     */
 +    @GuardedBy("mH")
-+    private final java.util.WeakHashMap<ViewRootImpl, long[]> mDuoImeSeqs = new java.util.WeakHashMap<>();
++    private final java.util.LinkedHashMap<Integer, DuoFocusReport> mDuoFocusReports =
++            new java.util.LinkedHashMap<>() {
++                @Override
++                protected boolean removeEldestEntry(Map.Entry<Integer, DuoFocusReport> eldest) {
++                    return size() > 32;
++                }
++            };
++    /** Duo two panel policy: per root, the local order ({@link #mDuoImeSeq}) of its last served show request. */
++    @GuardedBy("mH")
++    private final java.util.WeakHashMap<ViewRootImpl, Long> mDuoLastServedShow = new java.util.WeakHashMap<>();
 +    @GuardedBy("mH")
 +    private long mDuoImeSeq;
++
++    private static final class DuoFocusReport {
++        final WeakReference<ViewRootImpl> mRoot;
++        final long mOrder;
++
++        DuoFocusReport(ViewRootImpl root, long order) {
++            mRoot = new WeakReference<>(root);
++            mOrder = order;
++        }
++    }
 +
      /** Runtime state published by the window manager: 1 while the two panel window policy is active. */
      private static final String DUO_PANELS_ACTIVE_PROP = "sys.duode.panels.active";
      /** A remembered show request older than this (the window focus did not follow the tap) is dropped. */
-@@ -737,6 +748,8 @@ public final class InputMethodManager {
+@@ -737,6 +766,8 @@ public final class InputMethodManager {
      private static final int MSG_UNBIND_ACCESSIBILITY_SERVICE = 12;
      private static final int MSG_SET_INTERACTIVE = 13;
      private static final int MSG_SET_VISIBILITY = 14;
@@ -73,17 +98,27 @@ index f17aaef28..669bf78e1 100644
      private static final int MSG_START_INPUT_RESULT = 40;
  
      /**
-@@ -887,6 +900,9 @@ public final class InputMethodManager {
-         @Override
-         public void onPostWindowGainedFocus(View viewForWindowFocus,
-                 @NonNull WindowManager.LayoutParams windowAttribute) {
-+            synchronized (mH) {
-+                noteDuoImeSeqLocked(mCurRootView, 0 /* window focus gain reported */);
-+            }
-             onPostWindowGainedFocusInner(viewForWindowFocus, windowAttribute);
-             // Duo two panel policy: replay a keyboard request that the tap which focused this window made before the
-             // window focus arrived (see recordDuoPendingShowLocked).
-@@ -1538,6 +1554,32 @@ public final class InputMethodManager {
+@@ -973,9 +1004,9 @@ public final class InputMethodManager {
+                 final boolean imeRequestedVisible = hasViewImeRequestedVisible(
+                         mCurRootView.getView());
+ 
+-                // ignore the result
++                // ignore the result, except for the sequence number of the report (Duo two panel policy)
+                 Trace.traceBegin(TRACE_TAG_WINDOW_MANAGER, "IMM.startInputOrWindowGainedFocus");
+-                IInputMethodManagerGlobalInvoker.startInputOrWindowGainedFocus(
++                final int reportSeq = IInputMethodManagerGlobalInvoker.startInputOrWindowGainedFocus(
+                         StartInputReason.WINDOW_FOCUS_GAIN_REPORT_ONLY, mClient,
+                         viewForWindowFocus.getWindowToken(), startInputFlags, softInputMode,
+                         windowFlags,
+@@ -984,6 +1015,7 @@ public final class InputMethodManager {
+                         UserHandle.myUserId(), mImeBackCallbackProxy.getResultReceiver(),
+                         imeRequestedVisible);
+                 Trace.traceEnd(TRACE_TAG_WINDOW_MANAGER);
++                noteDuoFocusReportLocked(reportSeq, mCurRootView);
+             }
+         }
+ 
+@@ -1538,6 +1570,17 @@ public final class InputMethodManager {
                      }
                      return;
                  }
@@ -91,41 +126,27 @@ index f17aaef28..669bf78e1 100644
 +                    final SomeArgs args = (SomeArgs) msg.obj;
 +                    final ImeTracker.Token statsToken = (ImeTracker.Token) args.arg1;
 +                    final IBinder windowToken = (IBinder) args.arg2;
++                    final int startInputSeq = args.argi1;
 +                    args.recycle();
 +                    synchronized (mH) {
-+                        if (mCurRootView != null) {
-+                            ImeTracker.forLogging().onProgress(statsToken,
-+                                    ImeTracker.PHASE_CLIENT_HANDLE_SET_IME_VISIBILITY);
-+                            final ViewRootImpl root = mCurRootView;
-+                            final View rootView = root.getView();
-+                            // Only a hide for the window it is applied to can be checked against that window's
-+                            // requests; anything else is applied as a plain hide.
-+                            final boolean checkable = rootView != null
-+                                    && rootView.getWindowToken() == windowToken
-+                                    && root.getDisplayId() == Display.DEFAULT_DISPLAY
-+                                    && SystemProperties.getBoolean(DUO_PANELS_ACTIVE_PROP, false);
-+                            setImeVisibilityOnInsetsController(root, false /* visible */, statsToken,
-+                                    checkable ? () -> isDuoWindowFocusHideStale(root) : null);
-+                        } else {
-+                            ImeTracker.forLogging().onFailed(statsToken,
-+                                    ImeTracker.PHASE_CLIENT_HANDLE_SET_IME_VISIBILITY);
-+                        }
++                        handleDuoWindowFocusHideLocked(statsToken, windowToken, startInputSeq);
 +                    }
 +                    break;
 +                }
                  case MSG_SET_VISIBILITY:
                      final SomeArgs args = (SomeArgs) msg.obj;
                      final boolean visible = (boolean) args.arg1;
-@@ -1641,6 +1683,17 @@ public final class InputMethodManager {
+@@ -1641,6 +1684,18 @@ public final class InputMethodManager {
                      .sendToTarget();
          }
  
 +        @Override
 +        public void setImeHiddenOnWindowFocusGain(@Nullable ImeTracker.Token statsToken,
-+                @NonNull IBinder windowToken) {
++                @NonNull IBinder windowToken, int startInputSeq) {
 +            final SomeArgs args = SomeArgs.obtain();
 +            args.arg1 = statsToken;
 +            args.arg2 = windowToken;
++            args.argi1 = startInputSeq;
 +            ImeTracker.forLogging().onProgress(statsToken,
 +                    ImeTracker.PHASE_CLIENT_SET_IME_VISIBILITY);
 +            mH.obtainMessage(MSG_DUO_HIDE_ON_WINDOW_FOCUS_GAIN, args).sendToTarget();
@@ -134,15 +155,15 @@ index f17aaef28..669bf78e1 100644
          @Override
          public void setImeVisibility(boolean visible, @Nullable ImeTracker.Token statsToken) {
              final SomeArgs args = SomeArgs.obtain();
-@@ -2584,6 +2637,7 @@ public final class InputMethodManager {
+@@ -2584,6 +2639,7 @@ public final class InputMethodManager {
                              imeReqVisible ? InputMethodManager.RESULT_UNCHANGED_SHOWN
                                      : InputMethodManager.RESULT_SHOWN, null);
                  }
-+                noteDuoImeSeqLocked(viewRootImpl, 1 /* served show */);
++                noteDuoServedShowLocked(viewRootImpl);
                  setImeVisibilityOnInsetsController(viewRootImpl, true /* visible */, statsToken);
                  return true;
              }
-@@ -2881,6 +2935,16 @@ public final class InputMethodManager {
+@@ -2881,6 +2937,16 @@ public final class InputMethodManager {
  
      private static void setImeVisibilityOnInsetsController(@NonNull ViewRootImpl viewRootImpl,
              boolean visible, @NonNull ImeTracker.Token statsToken) {
@@ -159,7 +180,7 @@ index f17aaef28..669bf78e1 100644
          final View view = viewRootImpl.getView();
          if (view == null) {
              if (android.tracing.Flags.imetrackerProtolog()) {
-@@ -2929,19 +2993,63 @@ public final class InputMethodManager {
+@@ -2929,19 +2995,95 @@ public final class InputMethodManager {
              vh.post(() -> {
                  if (visible) {
                      insetsController.show(WindowInsets.Type.ime(), statsToken);
@@ -195,78 +216,125 @@ index f17aaef28..669bf78e1 100644
 +     * the focus event reaches the app before the up, the window reports the focus gain with no focused editor, and
 +     * the system answers (soft input state unspecified, no editor: HIDE_UNSPECIFIED_WINDOW) with a hide that it sends
 +     * asynchronously. The up then focuses the editor, which asks for the keyboard and gets it; the hide, computed for
-+     * the window's state at the focus gain, arrived afterwards and took the keyboard away. The system now sends hides
-+     * computed for a window focus gain tagged with that window ({@code setImeHiddenOnWindowFocusGain}); such a hide is
-+     * stale, and dropped, if the same window made a served show request after it last reported a window focus gain.
-+     * Called on the view's thread just before the hide would be applied, where that window's show requests are made,
-+     * so a request made before the hide runs is always seen.
++     * the window's state at the focus gain, arrived afterwards and took the keyboard away. While the two panel policy
++     * is active the system sends hides computed for a window focus gain tagged with the window and with the start
++     * input sequence number of the report they answer ({@code setImeHiddenOnWindowFocusGain}). Such a hide:
++     * <ul>
++     * <li>applies only to the root that made that report, and only while that root is still the current one and
++     * still has that window: a response for a window that has lost input focus since is obsolete and dropped, never
++     * applied to another window;</li>
++     * <li>is stale, and dropped, if that root made a served show request after that report (checked on the view's
++     * thread right before the hide would be applied, where the root's show requests are made);</li>
++     * <li>is applied as before otherwise.</li>
++     * </ul>
++     * Both report paths record their report before the response can be handled (under {@code mH}). A report that is
++     * no longer recorded (the bounded record dropped it after many newer reports) is obsolete too and dropped.
 +     */
-+    private boolean isDuoWindowFocusHideStale(@NonNull ViewRootImpl root) {
-+        synchronized (mH) {
-+            final long[] seqs = mDuoImeSeqs.get(root);
-+            return seqs != null && seqs[1] > seqs[0];
-+        }
-+    }
-+
-+    /** Records a window focus gain report ({@code which} 0) or a served show request (1) of {@code root}. */
 +    @GuardedBy("mH")
-+    private void noteDuoImeSeqLocked(@Nullable ViewRootImpl root, int which) {
-+        if (root == null) {
++    private void handleDuoWindowFocusHideLocked(@Nullable ImeTracker.Token statsToken,
++            @Nullable IBinder windowToken, int startInputSeq) {
++        final DuoFocusReport report = mDuoFocusReports.remove(startInputSeq);
++        final ViewRootImpl root = report != null ? report.mRoot.get() : null;
++        final View rootView = root != null ? root.getView() : null;
++        if (root == null || root != mCurRootView || rootView == null
++                || rootView.getWindowToken() != windowToken) {
++            Log.i(TAG, "Duo: dropping the window focus gain hide for report " + startInputSeq
++                    + ": its window no longer has input focus");
++            ImeTracker.forLogging().onCancelled(statsToken,
++                    ImeTracker.PHASE_CLIENT_HANDLE_SET_IME_VISIBILITY);
 +            return;
 +        }
-+        long[] seqs = mDuoImeSeqs.get(root);
-+        if (seqs == null) {
-+            seqs = new long[2];
-+            mDuoImeSeqs.put(root, seqs);
-+        }
-+        seqs[which] = ++mDuoImeSeq;
++        ImeTracker.forLogging().onProgress(statsToken,
++                ImeTracker.PHASE_CLIENT_HANDLE_SET_IME_VISIBILITY);
++        final long reportOrder = report.mOrder;
++        setImeVisibilityOnInsetsController(root, false /* visible */, statsToken,
++                () -> isDuoWindowFocusHideStale(root, reportOrder));
 +    }
 +
++    /** Whether {@code root} made a served show request after its focus report of local order {@code reportOrder}. */
++    private boolean isDuoWindowFocusHideStale(@NonNull ViewRootImpl root, long reportOrder) {
++        synchronized (mH) {
++            final Long show = mDuoLastServedShow.get(root);
++            return show != null && show > reportOrder;
++        }
++    }
++
++    /** Records a window focus gain report of {@code root}, sent with start input sequence {@code startInputSeq}. */
++    @GuardedBy("mH")
++    private void noteDuoFocusReportLocked(int startInputSeq, @Nullable ViewRootImpl root) {
++        if (root == null || startInputSeq < 0) {
++            return;
++        }
++        mDuoFocusReports.put(startInputSeq, new DuoFocusReport(root, ++mDuoImeSeq));
++    }
++
++    /** Records a served show request of {@code root}. */
++    @GuardedBy("mH")
++    private void noteDuoServedShowLocked(@Nullable ViewRootImpl root) {
++        if (root != null) {
++            mDuoLastServedShow.put(root, ++mDuoImeSeq);
++        }
++    }
      private void sendFailureCallback(@NonNull @CallbackExecutor Executor executor,
              @NonNull Consumer<Boolean> callback) {
          if (executor == null || callback == null) {
+@@ -3754,6 +3896,9 @@ public final class InputMethodManager {
+                             mImeBackCallbackProxy.getResultReceiver(), imeRequestedVisible);
+ 
+             Trace.traceEnd(TRACE_TAG_WINDOW_MANAGER);
++            if ((startInputFlags & StartInputFlags.WINDOW_GAINED_FOCUS) != 0) {
++                noteDuoFocusReportLocked(startInputSeq, view.getViewRootImpl());
++            }
+             // Create a runnable for delayed notification to the app that the InputConnection is
+             // initialized and ready for use.
+             if (ic != null) {
 diff --git a/core/java/com/android/internal/inputmethod/IInputMethodClient.aidl b/core/java/com/android/internal/inputmethod/IInputMethodClient.aidl
-index 6eb9d2e0c..3d2c3858a 100644
+index 6eb9d2e0c..87f8d0825 100644
 --- a/core/java/com/android/internal/inputmethod/IInputMethodClient.aidl
 +++ b/core/java/com/android/internal/inputmethod/IInputMethodClient.aidl
-@@ -32,6 +32,12 @@ oneway interface IInputMethodClient {
+@@ -32,6 +32,13 @@ oneway interface IInputMethodClient {
      void setActive(boolean active, boolean fullscreen);
      void setInteractive(boolean active, boolean fullscreen);
      void setImeVisibility(boolean visible, in @nullable ImeTracker.Token statsToken);
 +    /**
-+     * Duo two panel policy: a hide the system computed for a window focus gain of {@code windowToken}. Applied like
-+     * {@link #setImeVisibility} with visible false, unless that window asked for the keyboard after it reported the
-+     * focus gain.
++     * Duo two panel policy: a hide the system computed for the window focus gain of {@code windowToken} that the client
++     * reported with start input sequence number {@code startInputSeq}. Applied like {@link #setImeVisibility} with
++     * visible false, to that report's window only, unless that window asked for the keyboard after the report.
 +     */
-+    void setImeHiddenOnWindowFocusGain(in @nullable ImeTracker.Token statsToken, in IBinder windowToken);
++    void setImeHiddenOnWindowFocusGain(in @nullable ImeTracker.Token statsToken, in IBinder windowToken,
++            int startInputSeq);
      void scheduleStartInputIfNecessary(boolean fullscreen);
      void reportFullscreenMode(boolean fullscreen);
      void setImeTraceEnabled(boolean enabled);
 diff --git a/services/core/java/com/android/server/inputmethod/IInputMethodClientInvoker.java b/services/core/java/com/android/server/inputmethod/IInputMethodClientInvoker.java
-index c2873e8ee..1f775520e 100644
+index c2873e8ee..b29c91fca 100644
 --- a/services/core/java/com/android/server/inputmethod/IInputMethodClientInvoker.java
 +++ b/services/core/java/com/android/server/inputmethod/IInputMethodClientInvoker.java
-@@ -264,6 +264,29 @@ final class IInputMethodClientInvoker {
+@@ -264,6 +264,33 @@ final class IInputMethodClientInvoker {
          }
      }
  
-+    /** Duo two panel policy: a hide computed for a window focus gain of {@code windowToken}. */
++    /**
++     * Duo two panel policy: a hide computed for the window focus gain of {@code windowToken} reported with start input
++     * sequence number {@code startInputSeq}.
++     */
 +    @AnyThread
 +    void setImeHiddenOnWindowFocusGain(@Nullable ImeTracker.Token statsToken,
-+            @NonNull IBinder windowToken) {
++            @NonNull IBinder windowToken, int startInputSeq) {
 +        if (mIsProxy) {
-+            setImeHiddenOnWindowFocusGainInternal(statsToken, windowToken);
++            setImeHiddenOnWindowFocusGainInternal(statsToken, windowToken, startInputSeq);
 +        } else {
-+            mHandler.post(() -> setImeHiddenOnWindowFocusGainInternal(statsToken, windowToken));
++            mHandler.post(() -> setImeHiddenOnWindowFocusGainInternal(statsToken, windowToken,
++                    startInputSeq));
 +        }
 +    }
 +
 +    @AnyThread
 +    private void setImeHiddenOnWindowFocusGainInternal(@Nullable ImeTracker.Token statsToken,
-+            @NonNull IBinder windowToken) {
++            @NonNull IBinder windowToken, int startInputSeq) {
 +        try {
 +            ImeTracker.forLogging().onProgress(statsToken, ImeTracker.PHASE_SERVER_CLIENT_INVOKER);
-+            mTarget.setImeHiddenOnWindowFocusGain(statsToken, windowToken);
++            mTarget.setImeHiddenOnWindowFocusGain(statsToken, windowToken, startInputSeq);
 +        } catch (RemoteException e) {
 +            logRemoteException(e);
 +            ImeTracker.forLogging().onFailed(statsToken, ImeTracker.PHASE_SERVER_CLIENT_INVOKER);
@@ -277,7 +345,7 @@ index c2873e8ee..1f775520e 100644
      void scheduleStartInputIfNecessary(boolean fullscreen) {
          if (mIsProxy) {
 diff --git a/services/core/java/com/android/server/inputmethod/InputMethodManagerService.java b/services/core/java/com/android/server/inputmethod/InputMethodManagerService.java
-index 10aee0eb1..592299834 100644
+index 10aee0eb1..e898c92b4 100644
 --- a/services/core/java/com/android/server/inputmethod/InputMethodManagerService.java
 +++ b/services/core/java/com/android/server/inputmethod/InputMethodManagerService.java
 @@ -109,6 +109,7 @@ import android.os.ResultReceiver;
@@ -288,25 +356,61 @@ index 10aee0eb1..592299834 100644
  import android.os.Trace;
  import android.os.UserHandle;
  import android.os.UserManager;
-@@ -3849,7 +3850,17 @@ public final class InputMethodManagerService implements IInputMethodManagerImpl.
+@@ -3479,11 +3480,19 @@ public final class InputMethodManagerService implements IInputMethodManagerImpl.
+             int unverifiedTargetSdkVersion, @UserIdInt int userId,
+             @NonNull ResultReceiver imeBackCallbackReceiver, boolean imeRequestedVisible,
+             int startInputSeq) {
+-        final var res = startInputOrWindowGainedFocusWithResult(startInputReason, client,
+-                windowToken, startInputFlags, softInputMode, windowFlags, editorInfo,
+-                inputConnection, remoteAccessibilityInputConnection,
+-                remoteComputerControlInputConnection, unverifiedTargetSdkVersion, userId,
+-                imeBackCallbackReceiver, imeRequestedVisible);
++        // Duo two panel policy: the client's sequence number of this request, echoed in a hide computed for a window
++        // focus gain (startInputOrWindowGainedFocusInternalLocked runs on this thread).
++        sDuoStartInputSeq.set(startInputSeq);
++        final InputBindResult res;
++        try {
++            res = startInputOrWindowGainedFocusWithResult(startInputReason, client,
++                    windowToken, startInputFlags, softInputMode, windowFlags, editorInfo,
++                    inputConnection, remoteAccessibilityInputConnection,
++                    remoteComputerControlInputConnection, unverifiedTargetSdkVersion, userId,
++                    imeBackCallbackReceiver, imeRequestedVisible);
++        } finally {
++            sDuoStartInputSeq.remove();
++        }
+         synchronized (ImfLock.class) {
+             final ClientState cs = mClientController.getClient(client.asBinder());
+             if (cs != null) {
+@@ -3849,7 +3858,18 @@ public final class InputMethodManagerService implements IInputMethodManagerImpl.
              }
              final var statsToken = createStatsTokenForFocusedClient(isShow, imeVisRes.getReason(),
                      userId);
 -            setImeVisibilityOnFocusedWindowClient(imeVisRes.isVisible(), userData, statsToken);
-+            if (!imeVisRes.isVisible() && isStartInputByWindowGainFocus
++            final Integer duoStartInputSeq = sDuoStartInputSeq.get();
++            if (!imeVisRes.isVisible() && isStartInputByWindowGainFocus && duoStartInputSeq != null
 +                    && SystemProperties.getBoolean("sys.duode.panels.active", false)
-+                    && userData.mImeBindingState.mFocusedWindowClient != null) {
-+                // Duo two panel policy: tag a hide computed for this window focus gain with the window, so that the
-+                // client can drop it if the window asked for the keyboard after reporting the focus gain (the tap
-+                // that moved focus to the other panel focuses its editor after this hide was computed).
-+                userData.mImeBindingState.mFocusedWindowClient.mClient.setImeHiddenOnWindowFocusGain(
-+                        statsToken, windowToken);
++                    && userData.mImeBindingState.mFocusedWindowClient == cs) {
++                // Duo two panel policy: tag a hide computed for this window focus gain with the window and the
++                // client's sequence number of this report, so that the client applies it to that window only and
++                // drops it if the window asked for the keyboard after this report (the tap that moved focus to the
++                // other panel focuses its editor after this hide was computed).
++                cs.mClient.setImeHiddenOnWindowFocusGain(statsToken, windowToken, duoStartInputSeq);
 +            } else {
 +                setImeVisibilityOnFocusedWindowClient(imeVisRes.isVisible(), userData, statsToken);
 +            }
              if (imeVisRes.getReason() == SoftInputShowHideReason.HIDE_UNSPECIFIED_WINDOW) {
                  // If focused display changed, we should unbind current method
                  // to make app window in previous display relayout after Ime
+@@ -6628,6 +6648,9 @@ public final class InputMethodManagerService implements IInputMethodManagerImpl.
+         return ShellCommandResult.SUCCESS;
+     }
+ 
++    /** Duo two panel policy: the client's start input sequence number of the request being handled on this thread. */
++    private static final ThreadLocal<Integer> sDuoStartInputSeq = new ThreadLocal<>();
++
+     @GuardedBy("ImfLock.class")
+     boolean setImeVisibilityOnFocusedWindowClient(boolean visible, UserData userData,
+             @NonNull ImeTracker.Token statsToken) {
 -- 
 2.34.1
 
